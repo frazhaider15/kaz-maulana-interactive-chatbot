@@ -210,12 +210,12 @@ export default function KarbalaChatbot() {
   const [loading, setLoading] = useState(false);
   const [speaking, setSpeaking] = useState(false);
   const [muted, setMuted] = useState(false);
+  const [started, setStarted] = useState(false);
   const bottomRef = useRef(null);
   const audioRef = useRef(null);       // the <audio> element that plays TTS
   const urlRef = useRef(null);         // current blob: URL, revoked when done
   const ttsAbortRef = useRef(null);    // aborts an in-flight /api/tts fetch
   const mutedRef = useRef(false);
-  const greetedRef = useRef(false);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -282,24 +282,14 @@ export default function KarbalaChatbot() {
     }
   }
 
-  // Speak the opening greeting on startup. Browsers block audio until the user
-  // interacts with the page, so we arm a one-time "first interaction" listener
-  // that plays the greeting (and unlocks audio for the rest of the session).
-  useEffect(() => {
-    const markGreeted = () => { greetedRef.current = true; };
-    const onGesture = () => {
-      if (!greetedRef.current) speak(GREETING, markGreeted);
-      window.removeEventListener("pointerdown", onGesture);
-      window.removeEventListener("keydown", onGesture);
-    };
-    window.addEventListener("pointerdown", onGesture);
-    window.addEventListener("keydown", onGesture);
-    return () => {
-      window.removeEventListener("pointerdown", onGesture);
-      window.removeEventListener("keydown", onGesture);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // Browsers block audio until a deliberate user gesture, so we show a "Tap to
+  // begin" overlay. That one tap both speaks the greeting and unlocks audio for
+  // the rest of the session (so later replies play without further interaction).
+  function beginSession() {
+    if (started) return;
+    setStarted(true);
+    speak(GREETING);
+  }
 
   function toggleMute() {
     setMuted((m) => {
@@ -351,6 +341,19 @@ export default function KarbalaChatbot() {
 
   return (
     <div style={s.wrapper}>
+      {/* Start overlay — one tap plays the greeting and unlocks audio. */}
+      {!started && (
+        <div style={s.startOverlay} onClick={beginSession}>
+          <div style={s.startCard}>
+            <ScholarAvatar size={140} floating />
+            <div style={s.startName}>Ustadh Noor</div>
+            <div style={s.startSub}>Your Karbala Guide 🌹</div>
+            <button style={s.startBtn} onClick={beginSession}>▶ Tap to begin</button>
+            <div style={s.startHint}>Tap anywhere to start and hear Ustadh Noor</div>
+          </div>
+        </div>
+      )}
+
       {/* Stars */}
       {starPositions.map((st) => (
         <div key={st.id} style={{ ...s.star, left:`${st.left}%`, top:`${st.top}%`, width:st.size, height:st.size, animationDelay:`${st.delay}s` }}/>
@@ -518,6 +521,58 @@ const s = {
     position: "relative",
     overflow: "hidden",
     padding: "0 0 20px 0",
+  },
+  // ── Start overlay ──
+  startOverlay: {
+    position: "fixed",
+    inset: 0,
+    zIndex: 50,
+    background: "radial-gradient(ellipse at 50% 40%, rgba(26,0,0,0.96), rgba(0,0,0,0.98))",
+    backdropFilter: "blur(6px)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    cursor: "pointer",
+    animation: "fadeUp 0.4s ease",
+  },
+  startCard: {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    gap: 10,
+    textAlign: "center",
+    padding: 24,
+  },
+  startName: {
+    fontFamily: "'Amiri', serif",
+    fontSize: 34,
+    fontWeight: 700,
+    color: "#ffd700",
+    letterSpacing: 1,
+    textShadow: "0 0 14px rgba(255,215,0,0.4)",
+    marginTop: 10,
+  },
+  startSub: {
+    fontSize: 15,
+    color: "rgba(255,200,150,0.75)",
+  },
+  startBtn: {
+    marginTop: 14,
+    background: "linear-gradient(135deg, #8b0000, #c0392b)",
+    color: "#ffd700",
+    border: "1px solid rgba(255,215,0,0.4)",
+    borderRadius: 40,
+    padding: "14px 32px",
+    fontSize: 18,
+    fontWeight: 800,
+    fontFamily: "'Nunito', sans-serif",
+    cursor: "pointer",
+    boxShadow: "0 4px 20px rgba(139,0,0,0.6)",
+  },
+  startHint: {
+    marginTop: 10,
+    fontSize: 12,
+    color: "rgba(255,255,255,0.45)",
   },
   star: {
     position: "absolute",
