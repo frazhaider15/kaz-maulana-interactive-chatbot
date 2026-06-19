@@ -9,6 +9,12 @@ const hasLogo = KAZ_LOGO_B64 && KAZ_LOGO_B64 !== "LOGO_PLACEHOLDER";
 // Ustadh Noor speaks his answers aloud via the browser's Web Speech API. We
 // prefer a male English voice so he sounds like a male scholar; if none is
 // available the browser default is used.
+//
+// To sound like an elderly man, we slow the delivery and lower the pitch — a
+// slower, deeper, measured voice reads as an older, wiser scholar. Tune here.
+const SPEECH_RATE = 0.82;  // < 1 = slower, more deliberate (elderly cadence)
+const SPEECH_PITCH = 0.75; // < 1 = deeper, lower (older male timbre)
+const SPEECH_LANG = "en-US"; // force English if the chosen voice has no lang
 const MALE_VOICE_PREFERENCES = [
   // Classic local Windows male (always play offline)
   "Microsoft David", "Microsoft Mark", "Microsoft George", "Microsoft Ravi",
@@ -217,6 +223,11 @@ const SUGGESTED_QUESTIONS = [
 
 const systemPrompt = `You are "Ustadh Noor" — a warm, gentle, and knowledgeable Islamic educator helping children (ages 6–14) learn about the events of Karbala, Imam Hussain (AS), Muharram, and Azadari. You are displayed on a projector in a classroom, speaking to a group of students.
 
+Your answer is read aloud by a text-to-speech voice, so it MUST be plain spoken English:
+- Do NOT use any emojis, emoticons, or pictographic symbols.
+- Do NOT use any markdown or formatting characters: no asterisks (*), underscores (_), backticks, hashes (#), bullet points, numbered lists, or headings.
+- Write in ordinary sentences with normal punctuation, exactly as a teacher would speak out loud.
+
 Your rules:
 - Always answer in simple, age-appropriate English
 - Be respectful and reverent about all Islamic figures — use (AS) for Imams and (SA) for ladies like Bibi Zainab
@@ -226,7 +237,7 @@ Your rules:
 - Only answer questions related to: Muharram, Karbala, Imam Hussain (AS), Azadari, the companions of Karbala, Islamic months, Yazid, the events of Ashura, and closely related Islamic history
 - If a question is off-topic, kindly say: "That's a great question! But I'm here specially to help you learn about Karbala and Muharram. Can you ask me something about Imam Hussain (AS)?"
 - Never discuss anything inappropriate or unrelated to this topic
-- End each answer with a warm encouraging line or emoji 🌹
+- End each answer with a warm, encouraging sentence (in plain words, with no emoji)
 
 You are part of KAZ School & Welfare, an Islamic educational organization based in Australia.`;
 
@@ -277,10 +288,11 @@ export default function KarbalaChatbot() {
     const clean = cleanForSpeech(text);
     if (!clean) return;
     const utter = new SpeechSynthesisUtterance(clean);
-    utter.rate = 0.9; utter.pitch = 0.9; utter.volume = 1;
+    utter.rate = SPEECH_RATE; utter.pitch = SPEECH_PITCH; utter.volume = 1;
     const voices = voicesRef.current.length ? voicesRef.current : synth.getVoices();
     const v = pickMaleVoice(voices);
-    if (v) { utter.voice = v; utter.lang = v.lang; }
+    if (v) utter.voice = v;
+    utter.lang = (v && v.lang) || SPEECH_LANG;
     utter.onstart = () => { setSpeaking(true); onStart?.(); };
     utter.onend = () => setSpeaking(false);
     utter.onerror = () => setSpeaking(false);
