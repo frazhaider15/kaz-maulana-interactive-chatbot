@@ -11,6 +11,7 @@ Claude, and Ustadh Noor — an animated scholar avatar — replies in a chat pan
 
 - **Node.js 18+** (this project was set up on Node 22)
 - An **Anthropic API key** — https://console.anthropic.com/settings/keys
+- An **ElevenLabs API key** — https://elevenlabs.io (powers the spoken voice)
 
 ## Setup
 
@@ -32,18 +33,44 @@ Enter, or tap one of the **Quick Questions** chips.
 ## How it works
 
 ```
-Browser (React)  ──POST /api/chat──►  Vite dev-server proxy  ──►  Anthropic API
-   (no API key)                        (injects ANTHROPIC_API_KEY)
+Browser (React) ──POST /api/chat──► Vite proxy ──► Anthropic API   (the answer text)
+   (no keys)     ──POST /api/tts ──► Vite proxy ──► ElevenLabs API  (the spoken MP3)
+                                     (inject keys server-side)
 ```
 
 - `src/KarbalaChatbot.jsx` — the UI component (animated avatar, chat panel,
-  suggested questions). It POSTs the full conversation to `/api/chat`.
-- `vite.config.js` — a small middleware that proxies `/api/chat` to Anthropic so
-  the **API key stays on the server** and is never shipped to the browser. It
-  also avoids the CORS block that prevents calling Anthropic directly from a page.
+  suggested questions). It POSTs the conversation to `/api/chat`, then POSTs the
+  reply text to `/api/tts` and plays the returned audio.
+- `vite.config.js` — middleware that proxies `/api/chat` to Anthropic and
+  `/api/tts` to ElevenLabs so the **API keys stay on the server** and are never
+  shipped to the browser (also avoids the CORS block on direct browser calls).
 
-The proxy pins the model to `claude-sonnet-4-6`. To change it, edit the `MODEL`
-constant near the top of `vite.config.js` (and `api/chat.js` for production).
+The chat proxy pins the model to `claude-sonnet-4-6` (edit the `MODEL` constant
+in `vite.config.js` and `api/chat.js`).
+
+## Voice (same voice for every user)
+
+The spoken voice comes from **ElevenLabs**, generated server-side, so every user
+hears the exact same elderly/mature male voice regardless of their device — the
+browser's built-in voices differ per OS and can't be enforced.
+
+- The default voice is **"Bill"** (an older American male). To change it, set
+  `ELEVENLABS_VOICE_ID` in `.env` to any usable `voice_id`.
+- **Free plan caveat:** on the ElevenLabs free tier, only built-in **premade**
+  voices work via the API — community **Voice Library** voices return
+  `402 paid_plan_required`. Premade male voices that are free-tier OK:
+  `Bill` (older, `pqHfZKP75CvOlQylNhV4`), `George` (mature British,
+  `JBFqnCBsd6RMkjVDRZzb`), `Brian` (`nPczCjzI2devNBz1zQrb`),
+  `Daniel` (`onwK4e9ZLuTAKqWW03F9`), `Arnold` (`VR6AewLTigWG4xSOukaG`),
+  `Adam` (`pNInz6obpgDQGcFmaJgB`). To use a Voice-Library/"Age: Old" voice,
+  upgrade to a paid plan.
+- Voice/model settings live in the `ELEVENLABS_*` constants in `vite.config.js`
+  (dev) and `api/tts.js` (production) — keep them in sync.
+- A 🔊/🔇 toggle on screen lets you mute the voice (useful in a classroom).
+
+> Browsers block audio until the user interacts with the page, so the opening
+> greeting speaks on the **first click or key press**, which also unlocks audio
+> for the rest of the session.
 
 ## Optional: KAZ logo
 
@@ -64,20 +91,22 @@ npm run preview   # serves dist/ with the same /api/chat proxy
 
 ## Deploying to Vercel
 
-The local proxy in `vite.config.js` does **not** run on Vercel (Vercel serves the
-static `dist/` build, with no Vite server). Instead, `api/chat.js` is a **Vercel
-serverless function** that does the same job in production — Vercel automatically
-exposes any file in the root `api/` folder, so it becomes `/api/chat`.
+The local proxies in `vite.config.js` do **not** run on Vercel (Vercel serves the
+static `dist/` build, with no Vite server). Instead, `api/chat.js` and `api/tts.js`
+are **Vercel serverless functions** that do the same job in production — Vercel
+automatically exposes any file in the root `api/` folder, so they become
+`/api/chat` and `/api/tts`.
 
 Two things are required for it to work:
 
-1. **The `api/chat.js` file must be deployed** (commit/push it, or redeploy).
-2. **Set the API key in Vercel:** Project → Settings → Environment Variables →
-   add `ANTHROPIC_API_KEY` = your key (apply to Production, and Preview if you
-   use it). Then **redeploy** — env-var changes only take effect on a new build.
+1. **The `api/chat.js` and `api/tts.js` files must be deployed** (commit/push, or redeploy).
+2. **Set the keys in Vercel:** Project → Settings → Environment Variables → add
+   `ANTHROPIC_API_KEY` and `ELEVENLABS_API_KEY` (and optionally `ELEVENLABS_VOICE_ID`),
+   applied to Production (and Preview if you use it). Then **redeploy** — env-var
+   changes only take effect on a new build.
 
-Until the key is set, the app shows
-"ANTHROPIC_API_KEY is not set…" as its on-screen reply.
+Until the keys are set, the app shows an "…API_KEY is not set…" message (the chat
+reply on screen, or silent audio for TTS).
 
-> Local dev (`vite.config.js` proxy) and production (`api/chat.js` function) share
-> the same `MODEL`/`max_tokens` settings — if you change the model, update both.
+> Local dev (`vite.config.js` proxies) and production (`api/chat.js`, `api/tts.js`)
+> share the same model/voice settings — if you change one, update both.

@@ -5,6 +5,24 @@ const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
 const MODEL = "claude-sonnet-4-6";
 const MAX_TOKENS = 1024;
 
+// ── ElevenLabs text-to-speech ────────────────────────────────────────────────
+// An elderly/mature male voice so every user hears the same voice. Override with
+// ELEVENLABS_VOICE_ID in .env.
+//
+// NOTE: On the ElevenLabs FREE plan, only built-in "premade" voices work via the
+// API — community "Voice Library" voices return 402 (paid_plan_required). These
+// premade male voices are free-tier OK: Bill (older), George (mature British),
+// Brian, Daniel, Arnold, Adam.
+const ELEVENLABS_DEFAULT_VOICE_ID = "pqHfZKP75CvOlQylNhV4"; // "Bill" — older American male (premade, free-tier OK)
+const ELEVENLABS_MODEL_ID = "eleven_multilingual_v2";
+const ELEVENLABS_OUTPUT_FORMAT = "mp3_44100_128";
+const ELEVENLABS_VOICE_SETTINGS = {
+  stability: 0.5,
+  similarity_boost: 0.75,
+  style: 0.0,
+  use_speaker_boost: true,
+};
+
 /**
  * Tiny server-side proxy for the Anthropic Messages API.
  *
@@ -73,6 +91,86 @@ function anthropicProxy(apiKey) {
   };
 }
 
+/**
+ * Server-side proxy for ElevenLabs text-to-speech.
+ *
+ * The browser POSTs { text } to /api/tts. This middleware adds the secret
+ * ELEVENLABS_API_KEY (never shipped to the client), calls ElevenLabs, and
+ * streams back the MP3 audio. Using a server voice means every user hears the
+ * exact same voice regardless of their device.
+ */
+function elevenLabsProxy(apiKey, voiceId) {
+  const handle = async (req, res, next) => {
+    if (req.method !== "POST" || !req.url.startsWith("/api/tts")) {
+      return next();
+    }
+
+    if (!apiKey) {
+      res.statusCode = 500;
+      res.setHeader("Content-Type", "application/json");
+      res.end(
+        JSON.stringify({
+          error: {
+            message:
+              "ELEVENLABS_API_KEY is not set. Add it to .env and restart the dev server.",
+          },
+        })
+      );
+      return;
+    }
+
+    try {
+      const body = await readJson(req);
+      const text = (body.text || "").toString();
+      const upstream = await fetch(
+        `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=${ELEVENLABS_OUTPUT_FORMAT}`,
+        {
+          method: "POST",
+          headers: {
+            "xi-api-key": apiKey,
+            "Content-Type": "application/json",
+            Accept: "audio/mpeg",
+          },
+          body: JSON.stringify({
+            text,
+            model_id: ELEVENLABS_MODEL_ID,
+            voice_settings: ELEVENLABS_VOICE_SETTINGS,
+          }),
+        }
+      );
+
+      if (!upstream.ok) {
+        // Forward the JSON error (e.g. bad voice_id, quota) so the client can log it.
+        const errText = await upstream.text();
+        res.statusCode = upstream.status;
+        res.setHeader("Content-Type", "application/json");
+        res.end(errText || JSON.stringify({ error: { message: "TTS request failed" } }));
+        return;
+      }
+
+      const audio = Buffer.from(await upstream.arrayBuffer());
+      res.statusCode = 200;
+      res.setHeader("Content-Type", "audio/mpeg");
+      res.setHeader("Cache-Control", "no-store");
+      res.end(audio);
+    } catch (err) {
+      res.statusCode = 500;
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify({ error: { message: String(err) } }));
+    }
+  };
+
+  return {
+    name: "elevenlabs-proxy",
+    configureServer(server) {
+      server.middlewares.use(handle);
+    },
+    configurePreviewServer(server) {
+      server.middlewares.use(handle);
+    },
+  };
+}
+
 function readJson(req) {
   return new Promise((resolve, reject) => {
     let data = "";
@@ -91,9 +189,14 @@ function readJson(req) {
 }
 
 export default defineConfig(({ mode }) => {
-  // Load all env vars (including non-VITE_ prefixed) so the proxy can read the key.
+  // Load all env vars (including non-VITE_ prefixed) so the proxies can read keys.
   const env = loadEnv(mode, process.cwd(), "");
+  const voiceId = env.ELEVENLABS_VOICE_ID || ELEVENLABS_DEFAULT_VOICE_ID;
   return {
-    plugins: [react(), anthropicProxy(env.ANTHROPIC_API_KEY)],
+    plugins: [
+      react(),
+      anthropicProxy(env.ANTHROPIC_API_KEY),
+      elevenLabsProxy(env.ELEVENLABS_API_KEY, voiceId),
+    ],
   };
 });

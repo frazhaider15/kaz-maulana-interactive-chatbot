@@ -6,59 +6,16 @@ const KAZ_LOGO_B64 = "LOGO_PLACEHOLDER";
 const hasLogo = KAZ_LOGO_B64 && KAZ_LOGO_B64 !== "LOGO_PLACEHOLDER";
 
 // ── Voice (text-to-speech) ────────────────────────────────────────────────────
-// Ustadh Noor speaks his answers aloud via the browser's Web Speech API. We
-// prefer a male English voice so he sounds like a male scholar; if none is
-// available the browser default is used.
+// Ustadh Noor speaks his answers aloud using a SERVER-SIDE cloud voice
+// (ElevenLabs), so every user hears the exact same elderly male voice regardless
+// of their device — unlike the browser's built-in voices, which differ per OS.
 //
-// To sound like an elderly man, we slow the delivery and lower the pitch — a
-// slower, deeper, measured voice reads as an older, wiser scholar. Tune here.
-const SPEECH_RATE = 0.82;  // < 1 = slower, more deliberate (elderly cadence)
-const SPEECH_PITCH = 0.75; // < 1 = deeper, lower (older male timbre)
-const SPEECH_LANG = "en-US"; // force English if the chosen voice has no lang
-const MALE_VOICE_PREFERENCES = [
-  // Classic local Windows male (always play offline)
-  "Microsoft David", "Microsoft Mark", "Microsoft George", "Microsoft Ravi",
-  // macOS local male
-  "Daniel", "Alex", "Arthur", "Rishi", "Fred",
-  // Chrome
-  "Google UK English Male",
-  // Edge "Online (Natural)" male voices — last resort (cloud-dependent)
-  "Guy", "Christopher", "Eric", "Roger", "Steffan", "Brian", "Andrew",
-  "Ryan", "Thomas", "Brandon",
-];
-
-// Substrings that indicate a female voice — used to avoid picking one as a fallback.
-const FEMALE_VOICE_HINTS = [
-  "female",
-  "aria", "jenny", "michelle", "microsoft ana", "sonia", "libby", "emma", "nancy", "ava",
-  "zira", "hazel", "susan", "samantha", "victoria", "karen",
-  "moira", "tessa", "fiona", "veena", "catherine", "linda", "heera",
-  "google us english",
-];
-
-// Pick the best available male English voice, or null to fall back to the browser default.
-// Local voices are strongly preferred: Edge's cloud "Online (Natural)" voices are listed
-// by getVoices() but often don't actually play and fall back to the default female voice.
-function pickMaleVoice(voices) {
-  if (!voices || !voices.length) return null;
-  const isEnglish = v => v.lang && v.lang.toLowerCase().startsWith("en");
-  const isFemale = v => FEMALE_VOICE_HINTS.some(h => v.name.toLowerCase().includes(h));
-  const matchesPref = v => MALE_VOICE_PREFERENCES.some(p => v.name.includes(p));
-
-  const localKnownMale = voices.find(v => v.localService && isEnglish(v) && matchesPref(v));
-  if (localKnownMale) return localKnownMale;
-  const localEnglishMale = voices.find(v => v.localService && isEnglish(v) && !isFemale(v));
-  if (localEnglishMale) return localEnglishMale;
-  for (const pref of MALE_VOICE_PREFERENCES) {
-    const hit = voices.find(v => v.name.includes(pref));
-    if (hit) return hit;
-  }
-  const labelledMale = voices.find(v => /male/i.test(v.name) && !isFemale(v));
-  if (labelledMale) return labelledMale;
-  const englishNonFemale = voices.find(v => isEnglish(v) && !isFemale(v));
-  if (englishNonFemale) return englishNonFemale;
-  return null;
-}
+// The browser POSTs { text } to /api/tts; the server (vite.config.js in dev,
+// api/tts.js on Vercel) injects the ElevenLabs key, picks the voice, and returns
+// MP3 audio that we play in an <audio> element. The key never reaches the browser.
+//
+// To change the voice, set ELEVENLABS_VOICE_ID in .env (copy a voice_id from your
+// ElevenLabs Voice Library — filter by Age "Old" for a more elderly sound).
 
 // Strip emojis and markdown so the voice doesn't read "asterisk" / "rose emoji" aloud.
 function cleanForSpeech(text) {
@@ -254,8 +211,9 @@ export default function KarbalaChatbot() {
   const [speaking, setSpeaking] = useState(false);
   const [muted, setMuted] = useState(false);
   const bottomRef = useRef(null);
-  const synthRef = useRef(typeof window !== "undefined" ? window.speechSynthesis : null);
-  const voicesRef = useRef([]);
+  const audioRef = useRef(null);       // the <audio> element that plays TTS
+  const urlRef = useRef(null);         // current blob: URL, revoked when done
+  const ttsAbortRef = useRef(null);    // aborts an in-flight /api/tts fetch
   const mutedRef = useRef(false);
   const greetedRef = useRef(false);
 
@@ -263,71 +221,91 @@ export default function KarbalaChatbot() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, loading]);
 
-  // Voices load asynchronously — getVoices() is often empty on first call, so
-  // cache them now and refresh when the browser fires `voiceschanged`.
+  // One reusable <audio> element. Created once; reusing it keeps the page's
+  // audio "unlocked" after the first user gesture so later replies auto-play.
   useEffect(() => {
-    const synth = synthRef.current;
-    if (!synth) return;
-    const loadVoices = () => { voicesRef.current = synth.getVoices(); };
-    loadVoices();
-    synth.addEventListener("voiceschanged", loadVoices);
-    // Stop any speech if the component unmounts (e.g. dev hot-reload).
-    return () => {
-      synth.removeEventListener("voiceschanged", loadVoices);
-      synth.cancel();
-    };
+    const audio = new Audio();
+    audio.onplay = () => setSpeaking(true);
+    audio.onended = () => { setSpeaking(false); revokeUrl(); };
+    audio.onerror = () => setSpeaking(false);
+    audioRef.current = audio;
+    return () => { audio.pause(); revokeUrl(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Speak the given text aloud and drive the avatar's speaking animation from
-  // the real audio (onstart → animate, onend → stop). `onStart` fires only when
-  // audio actually begins (used to confirm the startup greeting played).
-  function speak(text, onStart) {
-    const synth = synthRef.current;
-    if (!synth || mutedRef.current) return;
-    synth.cancel();
-    const clean = cleanForSpeech(text);
-    if (!clean) return;
-    const utter = new SpeechSynthesisUtterance(clean);
-    utter.rate = SPEECH_RATE; utter.pitch = SPEECH_PITCH; utter.volume = 1;
-    const voices = voicesRef.current.length ? voicesRef.current : synth.getVoices();
-    const v = pickMaleVoice(voices);
-    if (v) utter.voice = v;
-    utter.lang = (v && v.lang) || SPEECH_LANG;
-    utter.onstart = () => { setSpeaking(true); onStart?.(); };
-    utter.onend = () => setSpeaking(false);
-    utter.onerror = () => setSpeaking(false);
-    synth.speak(utter);
+  function revokeUrl() {
+    if (urlRef.current) { URL.revokeObjectURL(urlRef.current); urlRef.current = null; }
   }
 
-  // Speak the opening greeting on startup. Browsers block speech until the user
-  // interacts with the page, so we try immediately (works where allowed) and
-  // also arm a one-time "first interaction" fallback that guarantees it plays.
+  function stopAudio() {
+    ttsAbortRef.current?.abort();
+    const audio = audioRef.current;
+    if (audio) { audio.pause(); audio.currentTime = 0; }
+    setSpeaking(false);
+  }
+
+  // Fetch MP3 from our /api/tts proxy (ElevenLabs, key injected server-side) and
+  // play it. `onStart` fires only when audio actually begins (confirms the
+  // startup greeting played, so it isn't queued twice).
+  async function speak(text, onStart) {
+    if (mutedRef.current) return;
+    const clean = cleanForSpeech(text);
+    if (!clean) return;
+
+    stopAudio();
+    const controller = new AbortController();
+    ttsAbortRef.current = controller;
+    try {
+      const res = await fetch("/api/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: clean }),
+        signal: controller.signal,
+      });
+      if (!res.ok) { setSpeaking(false); return; }
+      const buf = await res.arrayBuffer();
+      if (controller.signal.aborted) return; // a newer request superseded this one
+      revokeUrl();
+      const url = URL.createObjectURL(new Blob([buf], { type: "audio/mpeg" }));
+      urlRef.current = url;
+      const audio = audioRef.current;
+      audio.src = url;
+      const started = audio.play();
+      if (started?.then) {
+        started.then(() => onStart?.()).catch(() => setSpeaking(false));
+      } else {
+        onStart?.();
+      }
+    } catch {
+      // Aborted (new question) or network error — just stop animating.
+      setSpeaking(false);
+    }
+  }
+
+  // Speak the opening greeting on startup. Browsers block audio until the user
+  // interacts with the page, so we arm a one-time "first interaction" listener
+  // that plays the greeting (and unlocks audio for the rest of the session).
   useEffect(() => {
     const markGreeted = () => { greetedRef.current = true; };
-    const tryGreet = () => {
-      if (greetedRef.current) return;
-      speak(GREETING, markGreeted);
-    };
     const onGesture = () => {
-      if (!greetedRef.current) tryGreet();
-      detach();
-    };
-    const detach = () => {
+      if (!greetedRef.current) speak(GREETING, markGreeted);
       window.removeEventListener("pointerdown", onGesture);
       window.removeEventListener("keydown", onGesture);
     };
-    // Optimistic attempt for browsers that allow speech without a gesture.
-    const t = setTimeout(tryGreet, 400);
     window.addEventListener("pointerdown", onGesture);
     window.addEventListener("keydown", onGesture);
-    return () => { clearTimeout(t); detach(); };
+    return () => {
+      window.removeEventListener("pointerdown", onGesture);
+      window.removeEventListener("keydown", onGesture);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function toggleMute() {
     setMuted((m) => {
       const next = !m;
       mutedRef.current = next;
-      if (next) { synthRef.current?.cancel(); setSpeaking(false); }
+      if (next) stopAudio();
       return next;
     });
   }
@@ -337,8 +315,7 @@ export default function KarbalaChatbot() {
     if (!userMsg || loading) return;
     setInput("");
     // Interrupt any answer currently being spoken.
-    synthRef.current?.cancel();
-    setSpeaking(false);
+    stopAudio();
 
     const newMessages = [...messages, { role: "user", content: userMsg }];
     setMessages(newMessages);
