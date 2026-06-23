@@ -73,13 +73,25 @@ function anthropicProxy(apiKey) {
           max_tokens: MAX_TOKENS,
           system: body.system,
           messages: body.messages,
+          // Stream tokens so the browser can speak the first sentence while the
+          // rest of the answer is still being generated.
+          stream: true,
         }),
       });
 
-      const text = await upstream.text();
-      res.statusCode = upstream.status;
-      res.setHeader("Content-Type", "application/json");
-      res.end(text);
+      if (!upstream.ok || !upstream.body) {
+        const errText = await upstream.text();
+        res.statusCode = upstream.status || 502;
+        res.setHeader("Content-Type", "application/json");
+        res.end(errText || JSON.stringify({ error: { message: "Chat request failed" } }));
+        return;
+      }
+
+      res.statusCode = 200;
+      res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+      res.setHeader("Cache-Control", "no-store");
+      res.setHeader("Connection", "keep-alive");
+      Readable.fromWeb(upstream.body).pipe(res);
     } catch (err) {
       res.statusCode = 500;
       res.setHeader("Content-Type", "application/json");

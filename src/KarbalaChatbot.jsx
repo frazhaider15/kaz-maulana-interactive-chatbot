@@ -30,6 +30,48 @@ function cleanForSpeech(text) {
     .trim();
 }
 
+// Split streamed text into complete sentences for incremental speaking. A
+// sentence is only emitted once it's followed by whitespace, so we never cut a
+// word mid-token as the stream trickles in. The trailing remainder is returned
+// for the caller to keep accumulating.
+function splitSentences(buf) {
+  const sentences = [];
+  const re = /[^.!?…]*[.!?…]+["')\]]*\s+/g;
+  let lastIndex = 0;
+  let m;
+  while ((m = re.exec(buf)) !== null) {
+    sentences.push(buf.slice(lastIndex, re.lastIndex).trim());
+    lastIndex = re.lastIndex;
+  }
+  return { sentences, rest: buf.slice(lastIndex) };
+}
+
+// Pull the text out of one Anthropic SSE event block. Returns "" for pings,
+// message_delta, and other non-text events.
+function parseSseTextDelta(rawEvent) {
+  let data = "";
+  for (const line of rawEvent.split("\n")) {
+    const l = line.trimStart();
+    if (l.startsWith("data:")) data += l.slice(5).trim();
+  }
+  if (!data || data === "[DONE]") return "";
+  try {
+    const json = JSON.parse(data);
+    if (json.type === "content_block_delta" && json.delta?.type === "text_delta") {
+      return json.delta.text || "";
+    }
+  } catch {
+    // Non-JSON keepalive line — ignore.
+  }
+  return "";
+}
+
+// A ~20ms silent WAV. Playing it on each pooled <audio> element during the
+// opening user gesture "unlocks" them, so later (non-gesture) sentence
+// transitions are allowed to autoplay even on stricter browsers.
+const SILENT_WAV =
+  "data:audio/wav;base64,UklGRsQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YaAAAACAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICA";
+
 // ── Animated Scholar Avatar with black turban, speaking mouth ─────────────────
 function ScholarAvatar({ size = 80, speaking = false, floating = false }) {
   return (
@@ -213,61 +255,185 @@ export default function KarbalaChatbot() {
   const [muted, setMuted] = useState(false);
   const [started, setStarted] = useState(false);
   const bottomRef = useRef(null);
-  const audioRef = useRef(null);       // the <audio> element that streams + plays TTS
+  // Two pooled <audio> elements for gapless playback: while one speaks a
+  // sentence, the next sentence preloads into the other.
+  const audioPoolRef = useRef([]);
   const mutedRef = useRef(false);
+  // Mutable state for the in-progress spoken answer (refs, not React state, so
+  // producing/consuming sentences doesn't trigger re-renders).
+  const speechRef = useRef({
+    seq: 0,            // bumped per answer; invalidates stale producers/consumers
+    queue: [],         // cleaned sentences ready to speak, in order
+    notify: null,      // resolve fn that wakes the consumer when a sentence lands
+    streamDone: true,  // true once the producer (Claude stream) has finished
+    sentenceBuf: "",   // streamed text not yet a complete sentence
+    pendingChunk: "",  // complete sentences being batched before flushing
+    spokeFirst: false, // has the first chunk been flushed yet (fast start)
+  });
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, loading]);
 
-  // One reusable <audio> element. Created once; reusing it keeps the page's
-  // audio "unlocked" after the first user gesture so later replies auto-play.
+  // Two reusable <audio> elements (a playback pool). Created once and reused so
+  // the page's audio stays "unlocked" after the first user gesture.
   useEffect(() => {
-    const audio = new Audio();
-    audio.onplay = () => setSpeaking(true);
-    audio.onended = () => setSpeaking(false);
-    audio.onerror = () => setSpeaking(false);
-    audioRef.current = audio;
-    return () => { audio.pause(); };
+    const make = () => {
+      const a = new Audio();
+      a.preload = "auto";
+      a.onplay = () => setSpeaking(true);
+      return a;
+    };
+    const pool = [make(), make()];
+    audioPoolRef.current = pool;
+    return () => pool.forEach((a) => { a.pause(); a.removeAttribute("src"); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const ttsUrl = (s) => `/api/tts?text=${encodeURIComponent(s)}`;
+
+  // Cancel the current spoken answer: invalidate the producer/consumer (bump
+  // seq), clear the queue, and stop both pooled elements.
   function stopAudio() {
-    const audio = audioRef.current;
-    if (audio) {
-      audio.pause();
-      // Drop the current src so the browser stops downloading the old stream;
-      // speak() assigns a fresh one for the next answer.
-      audio.removeAttribute("src");
-      audio.load();
-    }
+    const sp = speechRef.current;
+    sp.seq++;
+    sp.queue = [];
+    sp.streamDone = true;
+    sp.sentenceBuf = "";
+    sp.pendingChunk = "";
+    sp.spokeFirst = false;
+    if (sp.notify) { sp.notify(); sp.notify = null; }
+    audioPoolRef.current.forEach((a) => { a.pause(); a.removeAttribute("src"); a.load(); });
     setSpeaking(false);
   }
 
-  // Stream MP3 from our /api/tts proxy (ElevenLabs, key injected server-side) and
-  // play it. Pointing the reused <audio> element at the endpoint lets the browser
-  // start playback on the first chunk instead of waiting for the whole file.
-  // `onStart` fires when playback actually begins.
-  async function speak(text, onStart) {
+  // Start a fresh spoken answer and kick off the consumer loop (which waits for
+  // sentences to be enqueued). Returns the seq token identifying this answer.
+  function beginSpeechTurn() {
+    stopAudio();                 // bump seq, clear any prior answer
+    const sp = speechRef.current;
+    sp.streamDone = false;
+    const seq = sp.seq;
+    consumeSpeech(seq);          // async; plays sentences as they arrive
+    return seq;
+  }
+
+  // Queue one sentence for speaking and wake the consumer.
+  function enqueueSpeech(sentence, seq) {
+    const sp = speechRef.current;
+    if (seq !== sp.seq) return;
+    const clean = cleanForSpeech(sentence);
+    if (!clean) return;
+    sp.queue.push(clean);
+    if (sp.notify) { sp.notify(); sp.notify = null; }
+  }
+
+  // Feed streamed text in. Whole sentences are extracted and batched; the first
+  // chunk flushes immediately (fast first audio), later chunks once they reach a
+  // comfortable length so playback stays smooth.
+  function feedSpeech(textChunk, seq) {
+    const sp = speechRef.current;
+    if (seq !== sp.seq) return;
+    sp.sentenceBuf += textChunk;
+    const { sentences, rest } = splitSentences(sp.sentenceBuf);
+    sp.sentenceBuf = rest;
+    for (const sentence of sentences) {
+      sp.pendingChunk = sp.pendingChunk ? `${sp.pendingChunk} ${sentence}` : sentence;
+      if (!sp.spokeFirst || sp.pendingChunk.length >= 80) {
+        enqueueSpeech(sp.pendingChunk, seq);
+        sp.pendingChunk = "";
+        sp.spokeFirst = true;
+      }
+    }
+  }
+
+  // No more text is coming: flush whatever's left and let the consumer drain.
+  function endSpeech(seq) {
+    const sp = speechRef.current;
+    if (seq !== sp.seq) return;
+    const tail = `${sp.pendingChunk} ${sp.sentenceBuf}`.trim();
+    sp.pendingChunk = "";
+    sp.sentenceBuf = "";
+    if (tail) enqueueSpeech(tail, seq);
+    sp.streamDone = true;
+    if (sp.notify) { sp.notify(); sp.notify = null; }
+  }
+
+  // Resolve once the next sentence is available, or the turn ends/supersedes.
+  function waitForSentence(seq) {
+    return new Promise((resolve) => {
+      const sp = speechRef.current;
+      if (seq !== sp.seq || sp.queue.length || sp.streamDone) { resolve(); return; }
+      sp.notify = resolve;
+    });
+  }
+
+  // Pull the next sentence, waiting for the producer if needed. null = no more.
+  async function takeSentence(seq) {
+    const sp = speechRef.current;
+    while (sp.queue.length === 0) {
+      if (sp.streamDone || seq !== sp.seq) return null;
+      await waitForSentence(seq);
+      if (seq !== sp.seq) return null;
+    }
+    return sp.queue.shift();
+  }
+
+  // Play one clip on a pooled element; resolves when it ends, errors, or is
+  // interrupted by stopAudio() (which pauses it).
+  function playClip(el, seq) {
+    return new Promise((resolve) => {
+      let settled = false;
+      const done = () => {
+        if (settled) return;
+        settled = true;
+        el.onended = null; el.onerror = null; el.onpause = null;
+        resolve();
+      };
+      el.onended = done;
+      el.onerror = done;
+      el.onpause = done; // fires when stopAudio() interrupts a playing clip
+      if (seq !== speechRef.current.seq) { done(); return; }
+      const p = el.play();
+      if (p?.catch) p.catch(done);
+    });
+  }
+
+  // Consumer loop: plays queued sentences back-to-back, preloading the next
+  // sentence into the other pooled element so transitions are near-gapless.
+  async function consumeSpeech(seq) {
+    const sp = speechRef.current;
+    const pool = audioPoolRef.current;
+    if (pool.length < 2) return;
+    let idx = 0;
+
+    let current = await takeSentence(seq);
+    if (current == null) { if (seq === sp.seq) setSpeaking(false); return; }
+    pool[idx].src = ttsUrl(current);
+
+    while (current != null && seq === sp.seq) {
+      const playing = playClip(pool[idx], seq);
+      const next = await takeSentence(seq);                 // wait for the next sentence
+      if (next != null && seq === sp.seq) pool[1 - idx].src = ttsUrl(next); // preload it
+      await playing;                                        // until current finishes
+      current = next;
+      idx = 1 - idx;
+    }
+    if (seq === sp.seq) setSpeaking(false);
+  }
+
+  // Speak a complete, already-known string (greeting, error messages) through
+  // the same queue/pool as streamed answers.
+  function speak(text) {
     if (mutedRef.current) return;
     const clean = cleanForSpeech(text);
     if (!clean) return;
-
-    stopAudio();
-    const audio = audioRef.current;
-    if (!audio) return;
-    // Native progressive playback: the short question text rides in the URL; the
-    // server injects the key and streams the audio back. Assigning a new src
-    // automatically supersedes any previous answer still playing.
-    audio.src = `/api/tts?text=${encodeURIComponent(clean)}`;
-    try {
-      const started = audio.play();
-      if (started?.then) await started;
-      onStart?.();
-    } catch {
-      // Autoplay blocked or network error — just stop animating.
-      setSpeaking(false);
-    }
+    const seq = beginSpeechTurn();
+    const { sentences, rest } = splitSentences(clean + " ");
+    for (const sentence of sentences) enqueueSpeech(sentence, seq);
+    const tail = rest.trim();
+    if (tail) enqueueSpeech(tail, seq);
+    endSpeech(seq);
   }
 
   // Browsers block audio until a deliberate user gesture, so we show a "Tap to
@@ -276,6 +442,15 @@ export default function KarbalaChatbot() {
   function beginSession() {
     if (started) return;
     setStarted(true);
+    // Unlock BOTH pooled elements within this user gesture by playing a tiny
+    // silent clip, so later (non-gesture) sentence transitions can autoplay.
+    audioPoolRef.current.forEach((a) => {
+      try {
+        a.src = SILENT_WAV;
+        const p = a.play();
+        if (p?.then) p.then(() => { a.pause(); a.removeAttribute("src"); }).catch(() => {});
+      } catch { /* ignore */ }
+    });
     speak(GREETING);
   }
 
@@ -299,10 +474,32 @@ export default function KarbalaChatbot() {
     setMessages(newMessages);
     setLoading(true);
 
+    // The assistant reply is added lazily on the first token and updated in
+    // place as more arrive (so no empty bubble flashes before text appears).
+    const assistantIndex = newMessages.length;
+    let added = false;
+    const setAssistant = (content) => {
+      if (!added) {
+        added = true;
+        setMessages([...newMessages, { role: "assistant", content }]);
+      } else {
+        setMessages((cur) => {
+          const copy = cur.slice();
+          if (copy[assistantIndex]) copy[assistantIndex] = { role: "assistant", content };
+          return copy;
+        });
+      }
+    };
+
+    // Speak the answer sentence-by-sentence as it streams (skip when muted).
+    const wantSpeech = !mutedRef.current;
+    const seq = wantSpeech ? beginSpeechTurn() : null;
+
+    let acc = "";
     try {
       // Calls our own dev-server proxy (see vite.config.js) / serverless function
-      // (api/chat.js), which injects the Anthropic API key server-side. The
-      // browser never sees the key, and there's no CORS block.
+      // (api/chat.js), which injects the Anthropic API key server-side and
+      // streams Claude's response back as Server-Sent Events.
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -311,17 +508,50 @@ export default function KarbalaChatbot() {
           messages: newMessages.map((m) => ({ role: m.role, content: m.content })),
         }),
       });
-      const data = await response.json();
-      const reply =
-        data.content?.[0]?.text ||
-        data.error?.message ||
-        "I'm sorry, I couldn't answer that. Please try again! 🌹";
-      setMessages([...newMessages, { role: "assistant", content: reply }]);
-      speak(reply);
+
+      if (!response.ok || !response.body) {
+        let msg = "I'm sorry, I couldn't answer that. Please try again! 🌹";
+        try { const d = await response.json(); msg = d.error?.message || msg; } catch { /* not JSON */ }
+        acc = msg;
+        setAssistant(acc);
+        if (wantSpeech) { feedSpeech(acc, seq); endSpeech(seq); }
+        return;
+      }
+
+      // Read the SSE stream: accumulate text_delta tokens, update the bubble
+      // live, and hand each token to the speech pipeline.
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      let done = false;
+      while (!done) {
+        const { value, done: rdDone } = await reader.read();
+        if (rdDone) break;
+        buf += decoder.decode(value, { stream: true });
+        let nl;
+        while ((nl = buf.indexOf("\n\n")) !== -1) {
+          const evt = buf.slice(0, nl);
+          buf = buf.slice(nl + 2);
+          const token = parseSseTextDelta(evt);
+          if (token) {
+            acc += token;
+            setAssistant(acc);
+            if (wantSpeech) feedSpeech(token, seq);
+          }
+          if (evt.includes('"type":"message_stop"')) done = true;
+        }
+      }
+
+      if (!acc.trim()) {
+        acc = "I'm sorry, I couldn't answer that. Please try again! 🌹";
+        setAssistant(acc);
+        if (wantSpeech) feedSpeech(acc, seq);
+      }
+      if (wantSpeech) endSpeech(seq);
     } catch {
       const errReply = "Oops! Something went wrong. Please try again! 🌹";
-      setMessages([...newMessages, { role: "assistant", content: errReply }]);
-      speak(errReply);
+      setAssistant(errReply);
+      speak(errReply); // begins a fresh turn (invalidates any partial speech)
     } finally {
       setLoading(false);
     }
@@ -414,7 +644,7 @@ export default function KarbalaChatbot() {
                 </div>
               </div>
             ))}
-            {loading && (
+            {loading && messages[messages.length - 1]?.role !== "assistant" && (
               <div style={{ ...s.msgRow, justifyContent:"flex-start" }}>
                 <ScholarAvatar size={40}/>
                 <div style={s.botBubble}>
