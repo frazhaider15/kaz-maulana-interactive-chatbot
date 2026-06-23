@@ -5,12 +5,20 @@
 // Settings → Environment Variables), calls ElevenLabs, and returns MP3 audio.
 // Using a server voice means every user hears the exact same voice.
 
+import { Readable } from "node:stream";
+
 // NOTE: On the ElevenLabs FREE plan, only built-in "premade" voices work via the
 // API — community "Voice Library" voices return 402. Free-tier-OK premade males:
 // Bill (older), George (mature British), Brian, Daniel, Arnold, Adam.
 const ELEVENLABS_DEFAULT_VOICE_ID = "pqHfZKP75CvOlQylNhV4"; // "Bill" — older American male (premade, free-tier OK)
-const ELEVENLABS_MODEL_ID = "eleven_multilingual_v2";
-const ELEVENLABS_OUTPUT_FORMAT = "mp3_44100_128";
+// eleven_flash_v2_5 is ElevenLabs' lowest-latency model (~75ms model latency,
+// 32 languages). Swap to "eleven_turbo_v2_5" for a touch more warmth at slightly
+// higher latency, or back to "eleven_multilingual_v2" for max fidelity (slowest).
+const ELEVENLABS_MODEL_ID = process.env.ELEVENLABS_MODEL_ID || "eleven_flash_v2_5";
+// Lighter format = smaller payload + faster first audio chunk when streaming.
+// 22050/32kbps is plenty for spoken speech on a projector; bump to mp3_44100_64
+// or mp3_44100_128 via env if you want richer audio.
+const ELEVENLABS_OUTPUT_FORMAT = process.env.ELEVENLABS_OUTPUT_FORMAT || "mp3_22050_32";
 const ELEVENLABS_VOICE_SETTINGS = {
   stability: 0.5,
   similarity_boost: 0.75,
@@ -19,8 +27,10 @@ const ELEVENLABS_VOICE_SETTINGS = {
 };
 
 export default async function handler(req, res) {
-  if (req.method !== "POST") {
-    res.setHeader("Allow", "POST");
+  // GET lets the browser's <audio> element stream the endpoint directly (text
+  // rides in the query string); POST is kept for programmatic callers.
+  if (req.method !== "GET" && req.method !== "POST") {
+    res.setHeader("Allow", "GET, POST");
     res.status(405).json({ error: { message: "Method not allowed" } });
     return;
   }
@@ -39,9 +49,14 @@ export default async function handler(req, res) {
   const voiceId = process.env.ELEVENLABS_VOICE_ID || ELEVENLABS_DEFAULT_VOICE_ID;
 
   try {
-    const { text } = req.body || {};
+    // Text comes from the query string (GET, native <audio> streaming) or the
+    // JSON body (POST).
+    const text = (req.query?.text ?? req.body?.text ?? "").toString();
+
+    // The /stream endpoint returns audio as it's generated; piping it straight
+    // through lets the browser start playing the first words almost immediately.
     const upstream = await fetch(
-      `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=${ELEVENLABS_OUTPUT_FORMAT}`,
+      `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream?output_format=${ELEVENLABS_OUTPUT_FORMAT}`,
       {
         method: "POST",
         headers: {
@@ -50,27 +65,27 @@ export default async function handler(req, res) {
           Accept: "audio/mpeg",
         },
         body: JSON.stringify({
-          text: (text || "").toString(),
+          text,
           model_id: ELEVENLABS_MODEL_ID,
           voice_settings: ELEVENLABS_VOICE_SETTINGS,
         }),
       }
     );
 
-    if (!upstream.ok) {
+    if (!upstream.ok || !upstream.body) {
       // Forward the JSON error (e.g. bad voice_id, quota exceeded).
       const errText = await upstream.text();
-      res.status(upstream.status);
+      res.status(upstream.status || 502);
       res.setHeader("Content-Type", "application/json");
       res.send(errText || JSON.stringify({ error: { message: "TTS request failed" } }));
       return;
     }
 
-    const audio = Buffer.from(await upstream.arrayBuffer());
     res.status(200);
     res.setHeader("Content-Type", "audio/mpeg");
     res.setHeader("Cache-Control", "no-store");
-    res.send(audio);
+    // Pipe ElevenLabs' chunked audio straight to the client (no full-buffer wait).
+    Readable.fromWeb(upstream.body).pipe(res);
   } catch (err) {
     res.status(500).json({ error: { message: String(err) } });
   }

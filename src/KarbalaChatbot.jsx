@@ -10,9 +10,10 @@ const hasLogo = KAZ_LOGO_B64 && KAZ_LOGO_B64 !== "LOGO_PLACEHOLDER";
 // (ElevenLabs), so every user hears the exact same elderly male voice regardless
 // of their device — unlike the browser's built-in voices, which differ per OS.
 //
-// The browser POSTs { text } to /api/tts; the server (vite.config.js in dev,
-// api/tts.js on Vercel) injects the ElevenLabs key, picks the voice, and returns
-// MP3 audio that we play in an <audio> element. The key never reaches the browser.
+// The browser points an <audio> element at /api/tts?text=... ; the server
+// (vite.config.js in dev, api/tts.js on Vercel) injects the ElevenLabs key, picks
+// the voice, and STREAMS back MP3 audio so playback can start on the first chunk
+// instead of waiting for the whole file. The key never reaches the browser.
 //
 // To change the voice, set ELEVENLABS_VOICE_ID in .env (copy a voice_id from your
 // ElevenLabs Voice Library — filter by Age "Old" for a more elderly sound).
@@ -212,9 +213,7 @@ export default function KarbalaChatbot() {
   const [muted, setMuted] = useState(false);
   const [started, setStarted] = useState(false);
   const bottomRef = useRef(null);
-  const audioRef = useRef(null);       // the <audio> element that plays TTS
-  const urlRef = useRef(null);         // current blob: URL, revoked when done
-  const ttsAbortRef = useRef(null);    // aborts an in-flight /api/tts fetch
+  const audioRef = useRef(null);       // the <audio> element that streams + plays TTS
   const mutedRef = useRef(false);
 
   useEffect(() => {
@@ -226,58 +225,47 @@ export default function KarbalaChatbot() {
   useEffect(() => {
     const audio = new Audio();
     audio.onplay = () => setSpeaking(true);
-    audio.onended = () => { setSpeaking(false); revokeUrl(); };
+    audio.onended = () => setSpeaking(false);
     audio.onerror = () => setSpeaking(false);
     audioRef.current = audio;
-    return () => { audio.pause(); revokeUrl(); };
+    return () => { audio.pause(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  function revokeUrl() {
-    if (urlRef.current) { URL.revokeObjectURL(urlRef.current); urlRef.current = null; }
-  }
-
   function stopAudio() {
-    ttsAbortRef.current?.abort();
     const audio = audioRef.current;
-    if (audio) { audio.pause(); audio.currentTime = 0; }
+    if (audio) {
+      audio.pause();
+      // Drop the current src so the browser stops downloading the old stream;
+      // speak() assigns a fresh one for the next answer.
+      audio.removeAttribute("src");
+      audio.load();
+    }
     setSpeaking(false);
   }
 
-  // Fetch MP3 from our /api/tts proxy (ElevenLabs, key injected server-side) and
-  // play it. `onStart` fires only when audio actually begins (confirms the
-  // startup greeting played, so it isn't queued twice).
+  // Stream MP3 from our /api/tts proxy (ElevenLabs, key injected server-side) and
+  // play it. Pointing the reused <audio> element at the endpoint lets the browser
+  // start playback on the first chunk instead of waiting for the whole file.
+  // `onStart` fires when playback actually begins.
   async function speak(text, onStart) {
     if (mutedRef.current) return;
     const clean = cleanForSpeech(text);
     if (!clean) return;
 
     stopAudio();
-    const controller = new AbortController();
-    ttsAbortRef.current = controller;
+    const audio = audioRef.current;
+    if (!audio) return;
+    // Native progressive playback: the short question text rides in the URL; the
+    // server injects the key and streams the audio back. Assigning a new src
+    // automatically supersedes any previous answer still playing.
+    audio.src = `/api/tts?text=${encodeURIComponent(clean)}`;
     try {
-      const res = await fetch("/api/tts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: clean }),
-        signal: controller.signal,
-      });
-      if (!res.ok) { setSpeaking(false); return; }
-      const buf = await res.arrayBuffer();
-      if (controller.signal.aborted) return; // a newer request superseded this one
-      revokeUrl();
-      const url = URL.createObjectURL(new Blob([buf], { type: "audio/mpeg" }));
-      urlRef.current = url;
-      const audio = audioRef.current;
-      audio.src = url;
       const started = audio.play();
-      if (started?.then) {
-        started.then(() => onStart?.()).catch(() => setSpeaking(false));
-      } else {
-        onStart?.();
-      }
+      if (started?.then) await started;
+      onStart?.();
     } catch {
-      // Aborted (new question) or network error — just stop animating.
+      // Autoplay blocked or network error — just stop animating.
       setSpeaking(false);
     }
   }
