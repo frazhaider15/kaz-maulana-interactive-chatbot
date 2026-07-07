@@ -3,7 +3,7 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "Ustadh Noor — an interactive Islamic education chatbot about Karbala for children (KAZ School & Welfare).",
+  "description": "Teacher Noor — an interactive Islamic education chatbot about Karbala for children (KAZ School & Welfare).",
   "scripts": {
     "dev": "vite",
     "build": "vite build",

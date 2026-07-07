@@ -1,12 +1,12 @@
 import { useState, useRef, useEffect } from "react";
 
-// To show the KAZ logo, paste a base64 data URI (e.g. "data:image/png;base64,...")
-// here. While it stays as the placeholder, a styled "KAZ" badge is shown instead.
-const KAZ_LOGO_B64 = "LOGO_PLACEHOLDER";
-const hasLogo = KAZ_LOGO_B64 && KAZ_LOGO_B64 !== "LOGO_PLACEHOLDER";
+// The KAZ (Khanum Amber Zehra) logo is served from the public/ folder at
+// /kaz-logo.png, and is also wired up as the site favicon in index.html. If the
+// file is missing the <img> onError handler falls back to a styled "KAZ" badge.
+const KAZ_LOGO_SRC = "/kaz-logo.png";
 
 // ── Voice (text-to-speech) ────────────────────────────────────────────────────
-// Ustadh Noor speaks his answers aloud using a SERVER-SIDE cloud voice
+// Teacher Noor speaks his answers aloud using a SERVER-SIDE cloud voice
 // (ElevenLabs), so every user hears the exact same elderly male voice regardless
 // of their device — unlike the browser's built-in voices, which differ per OS.
 //
@@ -72,130 +72,253 @@ function parseSseTextDelta(rawEvent) {
 const SILENT_WAV =
   "data:audio/wav;base64,UklGRsQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YaAAAACAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICA";
 
-// ── Animated Scholar Avatar with black turban, speaking mouth ─────────────────
-function ScholarAvatar({ size = 80, speaking = false, floating = false }) {
+// ── Mouth viseme shapes ───────────────────────────────────────────────────────
+// While speaking we cycle through a handful of mouth shapes (visemes) to fake
+// natural lip movement. Each entry is what to draw for that frame.
+const VISEMES = [
+  { rx: 5.5, ry: 1.4 },   // nearly closed
+  { rx: 6.5, ry: 3.8 },   // open "ah"
+  { rx: 4.2, ry: 2.6 },   // round "oo"
+  { rx: 7.5, ry: 2.0 },   // wide "ee"
+  { rx: 5.0, ry: 4.6 },   // open wide
+  { rx: 5.8, ry: 2.2 },   // mid
+];
+
+// ── Animated Scholar Avatar ───────────────────────────────────────────────────
+// state: "idle" | "thinking" | "speaking" | "greeting"
+function ScholarAvatar({ size = 80, state = "idle", floating = false }) {
+  const speaking = state === "speaking";
+  const thinking = state === "thinking";
+  const greeting = state === "greeting";
+
+  // Drive the mouth visemes only while actually speaking. A short, slightly
+  // irregular interval reads as natural talking without needing audio analysis.
+  const [viseme, setViseme] = useState(0);
+  useEffect(() => {
+    if (!speaking) return;
+    let alive = true;
+    let timer;
+    const tick = () => {
+      if (!alive) return;
+      setViseme((v) => (v + 1 + Math.floor(Math.random() * 2)) % VISEMES.length);
+      timer = setTimeout(tick, 90 + Math.random() * 80);
+    };
+    tick();
+    return () => { alive = false; clearTimeout(timer); };
+  }, [speaking]);
+
+  const mouth = VISEMES[viseme];
+  // Unique-ish gradient ids so multiple avatars on the page don't clash.
+  const uid = `${size}`;
+
+  // Head wrapper animation: gentle bob while speaking, attentive lean while
+  // thinking, soft float when idle (if requested).
+  const headAnim = speaking
+    ? "headBob 1.6s ease-in-out infinite"
+    : thinking
+    ? "headTilt 2.4s ease-in-out infinite"
+    : floating
+    ? "floatScholar 3.5s ease-in-out infinite"
+    : "none";
+
   return (
     <svg
       width={size} height={size} viewBox="0 0 120 120"
       style={{
         flexShrink: 0,
-        filter: "drop-shadow(0 4px 12px rgba(0,0,0,0.6))",
-        animation: floating ? "floatScholar 3s ease-in-out infinite" : "none",
+        filter: "drop-shadow(0 6px 16px rgba(0,0,0,0.65))",
         overflow: "visible",
       }}
     >
       <defs>
-        <radialGradient id="bgGrad" cx="50%" cy="40%">
-          <stop offset="0%" stopColor="#2a0a0a" />
-          <stop offset="100%" stopColor="#0a0000" />
+        <radialGradient id={`bg-${uid}`} cx="50%" cy="38%">
+          <stop offset="0%" stopColor="#3a0f0f" />
+          <stop offset="70%" stopColor="#1a0404" />
+          <stop offset="100%" stopColor="#080000" />
         </radialGradient>
-        <radialGradient id="faceGrad" cx="45%" cy="35%">
-          <stop offset="0%" stopColor="#f0c090" />
-          <stop offset="100%" stopColor="#c8844a" />
+        <radialGradient id={`face-${uid}`} cx="42%" cy="32%">
+          <stop offset="0%" stopColor="#f6d3a8" />
+          <stop offset="60%" stopColor="#e0a86e" />
+          <stop offset="100%" stopColor="#bd7a44" />
         </radialGradient>
-        <radialGradient id="robeGrad" cx="50%" cy="0%">
-          <stop offset="0%" stopColor="#1a1a2e" />
-          <stop offset="100%" stopColor="#0a0a18" />
-        </radialGradient>
-        <filter id="glow">
+        <linearGradient id={`turban-${uid}`} x1="0%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0%" stopColor="#2c2c34" />
+          <stop offset="55%" stopColor="#161618" />
+          <stop offset="100%" stopColor="#070708" />
+        </linearGradient>
+        <linearGradient id={`robe-${uid}`} x1="0%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0%" stopColor="#26262a" />
+          <stop offset="55%" stopColor="#131315" />
+          <stop offset="100%" stopColor="#060607" />
+        </linearGradient>
+        <linearGradient id={`gold-${uid}`} x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stopColor="#fff1b0" />
+          <stop offset="50%" stopColor="#ffd24d" />
+          <stop offset="100%" stopColor="#c8920f" />
+        </linearGradient>
+        <filter id={`glow-${uid}`}>
           <feGaussianBlur stdDeviation="2" result="blur"/>
           <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
         </filter>
       </defs>
 
-      {/* Outer glow ring */}
-      <circle cx="60" cy="60" r="58" fill="none" stroke="#ffd700" strokeWidth="1" opacity="0.3"/>
+      {/* Outer halo rings */}
+      <circle cx="60" cy="60" r="58.5" fill="none" stroke={`url(#gold-${uid})`} strokeWidth="1.2" opacity="0.45"/>
+      <circle cx="60" cy="60" r="57" fill={`url(#bg-${uid})`}/>
 
-      {/* Background */}
-      <circle cx="60" cy="60" r="57" fill="url(#bgGrad)"/>
+      {/* ── Aba: black cleric cloak (static, sits behind the head) ── */}
+      <ellipse cx="60" cy="116" rx="47" ry="31" fill={`url(#robe-${uid})`}/>
+      <path d="M16 117 Q34 86 52 89 Q60 95 68 89 Q86 86 104 117Z" fill={`url(#robe-${uid})`}/>
+      {/* inner qaba peeking at the neckline */}
+      <path d="M52 89 L60 116 L68 89 Q60 95 52 89Z" fill="#2e2a22"/>
+      <path d="M52 89 Q60 95 68 89" stroke="#4a4236" strokeWidth="1.3" fill="none" opacity="0.85"/>
+      {/* aba shoulder folds & seams */}
+      <path d="M30 110 Q40 92 51 90" stroke="#000" strokeWidth="1" fill="none" opacity="0.28"/>
+      <path d="M90 110 Q80 92 69 90" stroke="#000" strokeWidth="1" fill="none" opacity="0.28"/>
+      <path d="M34 96 Q44 90 52 91" stroke="#34343c" strokeWidth="0.7" fill="none" opacity="0.5"/>
+      <path d="M86 96 Q76 90 68 91" stroke="#34343c" strokeWidth="0.7" fill="none" opacity="0.5"/>
 
-      {/* Robe / shoulders */}
-      <ellipse cx="60" cy="112" rx="42" ry="28" fill="url(#robeGrad)"/>
-      <ellipse cx="60" cy="104" rx="32" ry="22" fill="#111128"/>
-      {/* Robe collar */}
-      <path d="M45 85 Q60 92 75 85 L78 105 Q60 110 42 105Z" fill="#0d0d20"/>
+      {/* ── Head + ammama (bobs / tilts with state) ── */}
+      <g style={{ animation: headAnim, transformOrigin: "60px 70px" }}>
+        {/* Neck + soft shadow */}
+        <rect x="53" y="74" width="14" height="14" rx="6" fill="#bd7a44"/>
+        <ellipse cx="60" cy="80" rx="9" ry="4" fill="#000" opacity="0.18"/>
 
-      {/* Neck */}
-      <rect x="53" y="76" width="14" height="12" rx="5" fill="#c8844a"/>
+        {/* Ears */}
+        <ellipse cx="37.5" cy="66" rx="4" ry="6" fill={`url(#face-${uid})`}/>
+        <ellipse cx="82.5" cy="66" rx="4" ry="6" fill={`url(#face-${uid})`}/>
 
-      {/* Face base */}
-      <ellipse cx="60" cy="66" rx="22" ry="24" fill="url(#faceGrad)"/>
+        {/* Face base */}
+        <ellipse cx="60" cy="64" rx="23" ry="25" fill={`url(#face-${uid})`}/>
+        {/* Soft side shading for depth */}
+        <path d="M60 40 Q80 44 82 64 Q82 84 60 88 Q74 70 72 56 Q70 46 60 40Z" fill="#a8682f" opacity="0.16"/>
+        {/* Cheek warmth */}
+        <ellipse cx="46" cy="68" rx="6" ry="4" fill="#e08858" opacity="0.32"/>
+        <ellipse cx="74" cy="68" rx="6" ry="4" fill="#e08858" opacity="0.32"/>
+        {/* Forehead shine */}
+        <ellipse cx="54" cy="49" rx="9" ry="5" fill="#fff" opacity="0.12"/>
 
-      {/* Cheek warmth */}
-      <ellipse cx="45" cy="70" rx="6" ry="4" fill="#e09060" opacity="0.3"/>
-      <ellipse cx="75" cy="70" rx="6" ry="4" fill="#e09060" opacity="0.3"/>
+        {/* ── Full WHITE beard of an elderly scholar (drawn before mouth) ── */}
+        {/* main mass: jaw + chin, leaving cheeks & eyes clear */}
+        <path d="M37 60 Q36 88 49 101 Q60 109 71 101 Q84 88 83 60 Q80 73 74 79 L74 70 Q60 74 46 70 L46 79 Q40 73 37 60Z" fill="#efe9de"/>
+        <path d="M40 62 Q40 86 52 98 Q60 104 68 98 Q80 86 80 62 Q74 78 60 82 Q46 78 40 62Z" fill="#dcd4c5"/>
+        {/* sideburns connecting to turban */}
+        <path d="M37 56 Q35 64 39 72 Q40 64 42 58Z" fill="#efe9de"/>
+        <path d="M83 56 Q85 64 81 72 Q80 64 78 58Z" fill="#efe9de"/>
+        {/* soft grey strands for texture */}
+        <path d="M50 78 Q53 91 58 99" stroke="#b3aa99" strokeWidth="0.8" fill="none" opacity="0.55"/>
+        <path d="M70 78 Q67 91 62 99" stroke="#b3aa99" strokeWidth="0.8" fill="none" opacity="0.55"/>
+        <path d="M60 80 L60 101" stroke="#a89f8e" strokeWidth="0.7" fill="none" opacity="0.5"/>
+        <path d="M55 82 Q56 93 59 100" stroke="#a89f8e" strokeWidth="0.5" fill="none" opacity="0.4"/>
+        <path d="M65 82 Q64 93 61 100" stroke="#a89f8e" strokeWidth="0.5" fill="none" opacity="0.4"/>
 
-      {/* Beard - full, dark */}
-      <ellipse cx="60" cy="84" rx="18" ry="12" fill="#1a0f08"/>
-      <ellipse cx="60" cy="80" rx="14" ry="9" fill="#120a05"/>
-      <path d="M46 76 Q60 90 74 76 Q68 95 60 96 Q52 95 46 76Z" fill="#1a0f08"/>
+        {/* ── Eyes ── */}
+        {/* whites — a touch larger & brighter so he looks alert */}
+        <ellipse cx="51" cy="60" rx="5.4" ry="4" fill="#fffaf2"/>
+        <ellipse cx="69" cy="60" rx="5.4" ry="4" fill="#fffaf2"/>
+        {/* iris + pupil (look slightly up when thinking) */}
+        <g style={{ transform: thinking ? "translateY(-1px)" : "none" }}>
+          <circle cx="51" cy="60" r="3.2" fill="#5a300d"/>
+          <circle cx="69" cy="60" r="3.2" fill="#5a300d"/>
+          <circle cx="51" cy="60" r="1.6" fill="#1a0c02"/>
+          <circle cx="69" cy="60" r="1.6" fill="#1a0c02"/>
+          <circle cx="52.4" cy="58.6" r="1.1" fill="#fff" opacity="0.95"/>
+          <circle cx="70.4" cy="58.6" r="1.1" fill="#fff" opacity="0.95"/>
+        </g>
+        {/* Blinking eyelids (skin-coloured shutters that scale up to cover the eye) */}
+        <g style={{ animation: "blinkLids 5.2s ease-in-out infinite", transformOrigin: "60px 60px" }}>
+          <rect x="45.4" y="54" width="11.2" height="6.5" rx="3" fill={`url(#face-${uid})`}/>
+          <rect x="63.4" y="54" width="11.2" height="6.5" rx="3" fill={`url(#face-${uid})`}/>
+        </g>
 
-      {/* Mustache */}
-      <path d="M50 72 Q55 69 60 71 Q65 69 70 72 Q65 75 60 74 Q55 75 50 72Z" fill="#120a05"/>
+        {/* Thin round wire spectacles */}
+        <circle cx="51" cy="60" r="6.8" fill="none" stroke="#d8d3c8" strokeWidth="1.1" opacity="0.9"/>
+        <circle cx="69" cy="60" r="6.8" fill="none" stroke="#d8d3c8" strokeWidth="1.1" opacity="0.9"/>
+        <circle cx="51" cy="60" r="6.8" fill="#fff" opacity="0.06"/>
+        <circle cx="69" cy="60" r="6.8" fill="#fff" opacity="0.06"/>
+        <path d="M57.8 60 Q60 58.6 62.2 60" stroke="#d8d3c8" strokeWidth="1.1" fill="none" opacity="0.9"/>
+        <path d="M44.2 60 Q40 59 37.5 61" stroke="#d8d3c8" strokeWidth="0.9" fill="none" opacity="0.65"/>
+        <path d="M75.8 60 Q80 59 82.5 61" stroke="#d8d3c8" strokeWidth="0.9" fill="none" opacity="0.65"/>
 
-      {/* Eyes - warm brown */}
-      <ellipse cx="51" cy="62" rx="4" ry="4.5" fill="#0a0500"/>
-      <ellipse cx="69" cy="62" rx="4" ry="4.5" fill="#0a0500"/>
-      {/* Iris */}
-      <ellipse cx="51" cy="62" rx="2.5" ry="3" fill="#3d1a00"/>
-      <ellipse cx="69" cy="62" rx="2.5" ry="3" fill="#3d1a00"/>
-      {/* Shine */}
-      <circle cx="52.5" cy="60.5" r="1.2" fill="white" opacity="0.9"/>
-      <circle cx="70.5" cy="60.5" r="1.2" fill="white" opacity="0.9"/>
+        {/* Grey eyebrows of an elderly man — raise when speaking/thinking */}
+        <g style={{ transform: (speaking || thinking) ? "translateY(-1.5px)" : "none", transition: "transform 0.25s" }}>
+          <path d="M43 51 Q51 47.5 59 50.5" stroke="#8d8577" strokeWidth="2.6" fill="none" strokeLinecap="round"/>
+          <path d="M61 50.5 Q69 47.5 77 51" stroke="#8d8577" strokeWidth="2.6" fill="none" strokeLinecap="round"/>
+        </g>
 
-      {/* Eyebrows - strong */}
-      <path d="M45 57 Q51 54.5 57 56.5" stroke="#1a0a00" strokeWidth="2" fill="none" strokeLinecap="round"/>
-      <path d="M63 56.5 Q69 54.5 75 57" stroke="#1a0a00" strokeWidth="2" fill="none" strokeLinecap="round"/>
+        {/* Gentle age lines under the eyes */}
+        <path d="M45.5 66.5 Q48.5 68 51.5 67.2" stroke="#a8682f" strokeWidth="0.7" fill="none" opacity="0.3"/>
+        <path d="M68.5 67.2 Q71.5 68 74.5 66.5" stroke="#a8682f" strokeWidth="0.7" fill="none" opacity="0.3"/>
 
-      {/* Nose */}
-      <ellipse cx="60" cy="68" rx="3" ry="4" fill="#b87040" opacity="0.6"/>
-      <path d="M56 71 Q60 73 64 71" stroke="#a06030" strokeWidth="1" fill="none"/>
+        {/* Nose */}
+        <path d="M60 61 Q57.5 69 56 71 Q60 73.5 64 71 Q62.5 69 60 61Z" fill="#c98a52" opacity="0.5"/>
+        <ellipse cx="57.6" cy="71" rx="1.3" ry="1" fill="#9c5f2c" opacity="0.5"/>
+        <ellipse cx="62.4" cy="71" rx="1.3" ry="1" fill="#9c5f2c" opacity="0.5"/>
 
-      {/* Mouth - animated when speaking */}
-      {speaking ? (
-        <ellipse cx="60" cy="77" rx="5" ry="3.5" fill="#8b3010" style={{animation:"speakMouth 0.25s ease-in-out infinite alternate"}}/>
-      ) : (
-        <path d="M54 76 Q60 80 66 76" stroke="#8b3010" strokeWidth="1.8" fill="none" strokeLinecap="round"/>
-      )}
+        {/* ── White mustache (on top of beard, above the lip) ── */}
+        <path d="M48 74 Q54 70.5 60 73 Q66 70.5 72 74 Q66 79 60 76.5 Q54 79 48 74Z" fill="#f3eee4"/>
+        <path d="M52 74.5 Q56 72.5 60 74 Q64 72.5 68 74.5" stroke="#c4bcac" strokeWidth="0.6" fill="none" opacity="0.6"/>
 
-      {/* ── BLACK TURBAN ── */}
-      {/* Turban base wrap */}
-      <ellipse cx="60" cy="44" rx="26" ry="10" fill="#111111"/>
-      {/* Main turban body layers */}
-      <path d="M34 44 Q36 28 60 24 Q84 28 86 44 Q74 36 60 35 Q46 36 34 44Z" fill="#1a1a1a"/>
-      <path d="M36 40 Q38 24 60 20 Q82 24 84 40 Q72 32 60 31 Q48 32 36 40Z" fill="#222222"/>
-      <path d="M39 36 Q42 20 60 17 Q78 20 81 36 Q70 28 60 27 Q50 28 39 36Z" fill="#1a1a1a"/>
-      <path d="M42 32 Q46 16 60 14 Q74 16 78 32 Q68 25 60 24 Q52 25 42 32Z" fill="#111111"/>
-      {/* Turban peak */}
-      <ellipse cx="60" cy="14" rx="10" ry="6" fill="#0a0a0a"/>
-      <ellipse cx="60" cy="11" rx="6" ry="5" fill="#111111"/>
-      {/* Wrap detail lines */}
-      <path d="M36 40 Q60 47 84 40" stroke="#333" strokeWidth="0.8" fill="none" opacity="0.8"/>
-      <path d="M38 36 Q60 43 82 36" stroke="#2a2a2a" strokeWidth="0.8" fill="none" opacity="0.6"/>
-      {/* Golden turban pin/badge */}
-      <circle cx="60" cy="27" r="3.5" fill="#ffd700" opacity="0.8" filter="url(#glow)"/>
-      <circle cx="60" cy="27" r="2" fill="#ffaa00"/>
-      {/* Loose end of turban hanging on left */}
-      <path d="M36 38 Q30 50 33 62 Q35 68 38 66 Q36 55 40 45Z" fill="#1a1a1a"/>
+        {/* ── Mouth (sits in the gap below the mustache) ── */}
+        {speaking ? (
+          <g>
+            <ellipse cx="60" cy="81" rx={mouth.rx} ry={mouth.ry} fill="#5e1c0c"/>
+            <ellipse cx="60" cy={81 + mouth.ry * 0.35} rx={mouth.rx * 0.7} ry={mouth.ry * 0.5} fill="#8b3a1a"/>
+            {mouth.ry > 2.4 && <ellipse cx="60" cy={81 - mouth.ry * 0.45} rx={mouth.rx * 0.8} ry="1.1" fill="#fff" opacity="0.85"/>}
+          </g>
+        ) : greeting ? (
+          /* warm open smile with teeth */
+          <g>
+            <path d="M52 79 Q60 88 68 79 Q60 83 52 79Z" fill="#6e2410"/>
+            <path d="M53.5 79.4 Q60 82 66.5 79.4 Q60 81 53.5 79.4Z" fill="#fff" opacity="0.9"/>
+          </g>
+        ) : (
+          /* gentle resting smile */
+          <path d="M53.5 79 Q60 83.5 66.5 79" stroke="#7a2a12" strokeWidth="2" fill="none" strokeLinecap="round"/>
+        )}
 
-      {/* Book in right hand area */}
-      <rect x="76" y="90" width="18" height="22" rx="2.5" fill="#5c2a00"/>
-      <rect x="78" y="90" width="14" height="22" rx="1.5" fill="#f5e8c0"/>
-      <rect x="76" y="90" width="3" height="22" rx="1" fill="#3d1a00"/>
-      <line x1="80" y1="95" x2="90" y2="95" stroke="#8b4513" strokeWidth="0.8" opacity="0.5"/>
-      <line x1="80" y1="99" x2="90" y2="99" stroke="#8b4513" strokeWidth="0.8" opacity="0.5"/>
-      <line x1="80" y1="103" x2="90" y2="103" stroke="#8b4513" strokeWidth="0.8" opacity="0.5"/>
-      <line x1="80" y1="107" x2="90" y2="107" stroke="#8b4513" strokeWidth="0.8" opacity="0.5"/>
+        {/* ── Black AMMAMA (Shia cleric turban) ── */}
+        {/* A low, wide drum of wrapped coils with a flat-ish top — not a dome. */}
+        {/* thin white under-cap edge peeking at the brow */}
+        <path d="M40 49 Q60 44.5 80 49 Q60 47 40 49Z" fill="#e2dac6" opacity="0.55"/>
+        {/* wrapped coils, bottom -> top (each narrower; gradient gives each a rounded wrap) */}
+        <ellipse cx="60" cy="46.5" rx="30.5" ry="7.5" fill={`url(#turban-${uid})`}/>
+        <ellipse cx="60" cy="42" rx="30.5" ry="8" fill={`url(#turban-${uid})`}/>
+        <ellipse cx="60" cy="37.5" rx="29" ry="8" fill={`url(#turban-${uid})`}/>
+        <ellipse cx="60" cy="33.5" rx="26.5" ry="8" fill={`url(#turban-${uid})`}/>
+        <ellipse cx="60" cy="30" rx="23" ry="7.5" fill={`url(#turban-${uid})`}/>
+        {/* flat top of the drum */}
+        <ellipse cx="60" cy="27.5" rx="18.5" ry="6" fill={`url(#turban-${uid})`}/>
+        <ellipse cx="60" cy="26.5" rx="18.5" ry="5.5" fill="#16161a"/>
+        {/* coil seam highlights along each wrap's upper edge */}
+        <path d="M30 45 Q60 39.5 90 45" stroke="#42424a" strokeWidth="0.8" fill="none" opacity="0.65"/>
+        <path d="M30 40.5 Q60 35 90 40.5" stroke="#42424a" strokeWidth="0.8" fill="none" opacity="0.6"/>
+        <path d="M31.5 36 Q60 30.5 88.5 36" stroke="#3c3c44" strokeWidth="0.8" fill="none" opacity="0.55"/>
+        <path d="M34 32 Q60 26.5 86 32" stroke="#3c3c44" strokeWidth="0.7" fill="none" opacity="0.5"/>
+        {/* soft top sheen */}
+        <ellipse cx="55" cy="26" rx="8" ry="2.2" fill="#fff" opacity="0.06"/>
+        {/* small loose tail of the ammama tucked at the left side */}
+        <path d="M32 45 Q27 56 30 66 Q32 71 35 69 Q32 58 36 49Z" fill="#16161a"/>
+        <path d="M32 47 Q29 57 31 65" stroke="#34343c" strokeWidth="0.7" fill="none" opacity="0.5"/>
+      </g>
 
       {/* Speaking ripple effects */}
       {speaking && (
         <>
-          <circle cx="60" cy="60" r="62" fill="none" stroke="#ffd700" strokeWidth="1.5" opacity="0.15" style={{animation:"speakRing 0.8s ease-out infinite"}}/>
-          <circle cx="60" cy="60" r="64" fill="none" stroke="#ffd700" strokeWidth="1" opacity="0.08" style={{animation:"speakRing 0.8s ease-out 0.3s infinite"}}/>
+          <circle cx="60" cy="60" r="60" fill="none" stroke={`url(#gold-${uid})`} strokeWidth="1.5" opacity="0.18" style={{animation:"speakRing 0.9s ease-out infinite", transformOrigin:"60px 60px"}}/>
+          <circle cx="60" cy="60" r="62" fill="none" stroke={`url(#gold-${uid})`} strokeWidth="1" opacity="0.1" style={{animation:"speakRing 0.9s ease-out 0.35s infinite", transformOrigin:"60px 60px"}}/>
         </>
+      )}
+      {/* Thinking shimmer */}
+      {thinking && (
+        <circle cx="60" cy="60" r="59" fill="none" stroke={`url(#gold-${uid})`} strokeWidth="1.2" opacity="0.25" strokeDasharray="4 8" style={{animation:"spinRing 6s linear infinite", transformOrigin:"60px 60px"}}/>
       )}
     </svg>
   );
+}
+
+function Scholar({ size = 80, state = "idle", floating = false }) {
+  return <ScholarAvatar size={size} state={state} floating={floating} />;
 }
 
 const starPositions = Array.from({ length: 40 }, (_, i) => ({
@@ -206,7 +329,87 @@ const starPositions = Array.from({ length: 40 }, (_, i) => ({
   delay: Math.random() * 4,
 }));
 
-const lanternColors = ["#c0392b", "#8e44ad", "#e67e22", "#27ae60", "#2980b9"];
+// ── Bunting: Ahlul Bayt pennants strung on a rope ─────────────────────────────
+// Black mosque-arch pennants with a gold filigree double border and a gold
+// tassel at the tip, cycling through "Ya <name>, peace be upon him/her" —
+// styled after traditional Muharram processional flags.
+const PENNANTS = [
+  { name: "أبا عبدالله", suffix: "عليه السلام" },
+  { name: "حسين", suffix: "عليه السلام" },
+  { name: "زينب", suffix: "عليها السلام" },
+  { name: "عباس", suffix: "عليه السلام" },
+  { name: "علي", suffix: "عليه السلام" },
+  { name: "سجاد", suffix: "عليه السلام" },
+  { name: "فاطمة", suffix: "عليها السلام" },
+  { name: "قاسم", suffix: "عليه السلام" },
+];
+function HussainBunting() {
+  const pennants = Array.from({ length: 24 });
+  return (
+    <div style={s.buntingWrap}>
+      <div style={s.rope} />
+      <div style={s.pennantRow}>
+        {pennants.map((_, i) => {
+          const p = PENNANTS[i % PENNANTS.length];
+          const uid = `pn${i}`;
+          // Longer names need a smaller font to still fit the flag's width.
+          const nameSize = p.name.length > 8 ? 11 : p.name.length > 4 ? 14 : 17;
+          return (
+            <div key={i} style={{ ...s.pennant, animationDelay: `${(i % 7) * 0.25}s` }}>
+              <svg width="64" height="113" viewBox="0 0 84 148" style={{ display: "block", overflow: "visible" }}>
+                <defs>
+                  <linearGradient id={`pgold-${uid}`} x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stopColor="#fff1b0" />
+                    <stop offset="50%" stopColor="#ffd24d" />
+                    <stop offset="100%" stopColor="#a8790a" />
+                  </linearGradient>
+                </defs>
+                {/* loop hanging over the rope */}
+                <circle cx="42" cy="7" r="4" fill="none" stroke={`url(#pgold-${uid})`} strokeWidth="2" />
+                {/* outer flag body: flat top tapering to a point, like a mosque arch */}
+                <path
+                  d="M12 14 L72 14 C72 52 65 88 42 124 C19 88 12 52 12 14 Z"
+                  fill="#100e10"
+                  stroke={`url(#pgold-${uid})`}
+                  strokeWidth="2.6"
+                  strokeLinejoin="round"
+                />
+                {/* inner ornamental border line */}
+                <path
+                  d="M18 20 L66 20 C66 52 60 82 42 112 C24 82 18 52 18 20 Z"
+                  fill="none"
+                  stroke={`url(#pgold-${uid})`}
+                  strokeWidth="1"
+                  opacity="0.85"
+                />
+                {/* small medallion flourish under the top edge */}
+                <g transform="translate(42 26)">
+                  <rect x="-4" y="-4" width="8" height="8" rx="1.5" fill="#c81e1e" stroke={`url(#pgold-${uid})`}
+                    strokeWidth="1" transform="rotate(45)" />
+                  <circle cx="-11" cy="0" r="1.4" fill={`url(#pgold-${uid})`} />
+                  <circle cx="11" cy="0" r="1.4" fill={`url(#pgold-${uid})`} />
+                </g>
+                {/* "Ya <name>, peace be upon him/her" */}
+                <text x="42" y="42" textAnchor="middle" fontFamily="'Amiri', serif" fontSize="13" fontWeight="700"
+                  fill="#fdf3df">يا</text>
+                <text x="42" y="65" textAnchor="middle" fontFamily="'Amiri', serif" fontSize={nameSize} fontWeight="700"
+                  fill="#e2291f">{p.name}</text>
+                <text x="42" y="82" textAnchor="middle" fontFamily="'Amiri', serif" fontSize="9"
+                  fill="#fdf3df">{p.suffix}</text>
+                {/* gold tassel at the tip */}
+                <circle cx="42" cy="124" r="2.6" fill={`url(#pgold-${uid})`} />
+                {[-4, -2, 0, 2, 4].map((dx) => (
+                  <line key={dx} x1="42" y1="127" x2={42 + dx} y2="144" stroke={`url(#pgold-${uid})`}
+                    strokeWidth="1.4" strokeLinecap="round" />
+                ))}
+              </svg>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 const SUGGESTED_QUESTIONS = [
   "Who was Imam Hussain (AS)?",
@@ -221,7 +424,7 @@ const SUGGESTED_QUESTIONS = [
   "Who was Bibi Zainab (SA)?",
 ];
 
-const systemPrompt = `You are "Ustadh Noor" — a warm, gentle, and knowledgeable Islamic educator helping children (ages 6–14) learn about the events of Karbala, Imam Hussain (AS), Muharram, and Azadari. You are displayed on a projector in a classroom, speaking to a group of students.
+const systemPrompt = `You are "Teacher Noor" — a warm, gentle, and knowledgeable Islamic educator helping children (ages 6–14) learn about the events of Karbala, Imam Hussain (AS), Muharram, and Azadari. You are displayed on a projector in a classroom, speaking to a group of students.
 
 Your answer is read aloud by a text-to-speech voice, so it MUST be plain spoken English:
 - Do NOT use any emojis, emoticons, or pictographic symbols.
@@ -241,9 +444,9 @@ Your rules:
 
 You are part of KAZ School & Welfare, an Islamic educational organization based in Australia.`;
 
-// The opening message Ustadh Noor shows and speaks aloud on startup.
+// The opening message Teacher Noor shows and speaks aloud on startup.
 const GREETING =
-  "As-salamu alaykum, dear students! 🌹 I am Ustadh Noor, your Karbala Guide. Ask me anything about Imam Hussain (AS), the events of Karbala, Muharram, or Azadari. I am here to help you learn! 💫";
+  "As-salamu alaykum, dear students! 🌹 I am Teacher Noor, your Karbala Guide. Ask me anything about Imam Hussain (AS), the events of Karbala, Muharram, or Azadari. I am here to help you learn! 💫";
 
 export default function KarbalaChatbot() {
   const [messages, setMessages] = useState([
@@ -254,6 +457,7 @@ export default function KarbalaChatbot() {
   const [speaking, setSpeaking] = useState(false);
   const [muted, setMuted] = useState(false);
   const [started, setStarted] = useState(false);
+  const [logoOk, setLogoOk] = useState(true);
   const bottomRef = useRef(null);
   // Two pooled <audio> elements for gapless playback: while one speaks a
   // sentence, the next sentence preloads into the other.
@@ -563,11 +767,11 @@ export default function KarbalaChatbot() {
       {!started && (
         <div style={s.startOverlay} onClick={beginSession}>
           <div style={s.startCard}>
-            <ScholarAvatar size={140} floating />
-            <div style={s.startName}>Ustadh Noor</div>
+            <Scholar size={140} state="greeting" floating />
+            <div style={s.startName}>Teacher Noor</div>
             <div style={s.startSub}>Your Karbala Guide 🌹</div>
             <button style={s.startBtn} onClick={beginSession}>▶ Tap to begin</button>
-            <div style={s.startHint}>Tap anywhere to start and hear Ustadh Noor</div>
+            <div style={s.startHint}>Tap anywhere to start and hear Teacher Noor</div>
           </div>
         </div>
       )}
@@ -577,26 +781,20 @@ export default function KarbalaChatbot() {
         <div key={st.id} style={{ ...s.star, left:`${st.left}%`, top:`${st.top}%`, width:st.size, height:st.size, animationDelay:`${st.delay}s` }}/>
       ))}
 
-      {/* Top lanterns string */}
-      <div style={s.lanternBar}>
-        {lanternColors.map((col, i) => (
-          <div key={i} style={{ ...s.lanternWrap, animationDelay:`${i*0.5}s` }}>
-            <div style={s.lanternString}/>
-            <div style={{ ...s.lantern, background: col }}>
-              <div style={s.lanternCap}/>
-              <div style={s.lanternFlame}/>
-            </div>
-          </div>
-        ))}
-      </div>
+      {/* "Hussain" pennant bunting strung across the top */}
+      <HussainBunting />
 
-      {/* Main layout: Scholar LEFT, Chat RIGHT */}
-      <div style={s.mainLayout}>
+      {/* Main layout: Scholar LEFT, Chat RIGHT (stacks vertically on mobile) */}
+      <div style={s.mainLayout} className="kaz-main-layout">
 
         {/* ── LEFT: Scholar Panel ── */}
-        <div style={s.scholarSide}>
+        <div style={s.scholarSide} className="kaz-scholar-side">
           <div style={s.scholarCircle}>
-            <ScholarAvatar size={180} speaking={speaking || loading} floating={!speaking && !loading}/>
+            <Scholar
+              size={180}
+              state={speaking ? "speaking" : loading ? "thinking" : "idle"}
+              floating={!speaking && !loading}
+            />
             {(speaking || loading) && (
               <div style={s.speechWave}>
                 {[0,1,2,3,4].map(i => (
@@ -605,7 +803,7 @@ export default function KarbalaChatbot() {
               </div>
             )}
           </div>
-          <div style={s.scholarName}>Ustadh Noor</div>
+          <div style={s.scholarName}>Teacher Noor</div>
           <div style={s.scholarTitle}>Your Karbala Guide 🌹</div>
           <div style={s.statusBadge}>
             <span style={{ ...s.statusDot, background: speaking ? "#22c55e" : loading ? "#f59e0b" : "#6b7280" }}/>
@@ -619,18 +817,23 @@ export default function KarbalaChatbot() {
           >
             {muted ? "🔇 Voice off" : "🔊 Voice on"}
           </button>
-          {hasLogo ? (
-            <img src={KAZ_LOGO_B64} alt="KAZ" style={s.kazLogo}/>
+          {logoOk ? (
+            <img
+              src={KAZ_LOGO_SRC}
+              alt="Khanum Amber Zehra (KAZ)"
+              style={s.kazLogo}
+              onError={() => setLogoOk(false)}
+            />
           ) : (
             <div style={s.kazLogoFallback}>KAZ</div>
           )}
         </div>
 
         {/* ── RIGHT: Chat Panel ── */}
-        <div style={s.chatSide}>
+        <div style={s.chatSide} className="kaz-chat-side">
           {/* Header */}
           <div style={s.header}>
-            <div style={s.headerTitle}>🕌 Ask Ustadh Noor</div>
+            <div style={s.headerTitle}>🕌 Ask Teacher Noor</div>
             <div style={s.headerSub}>About Imam Hussain (AS), Karbala & Muharram</div>
           </div>
 
@@ -638,7 +841,7 @@ export default function KarbalaChatbot() {
           <div style={s.messages}>
             {messages.map((msg, i) => (
               <div key={i} style={{ ...s.msgRow, justifyContent: msg.role==="user" ? "flex-end" : "flex-start" }}>
-                {msg.role === "assistant" && <ScholarAvatar size={40}/>}
+                {msg.role === "assistant" && <Scholar size={40}/>}
                 <div style={msg.role==="user" ? s.userBubble : s.botBubble}>
                   {msg.content}
                 </div>
@@ -646,7 +849,7 @@ export default function KarbalaChatbot() {
             ))}
             {loading && messages[messages.length - 1]?.role !== "assistant" && (
               <div style={{ ...s.msgRow, justifyContent:"flex-start" }}>
-                <ScholarAvatar size={40}/>
+                <Scholar size={40} state="thinking"/>
                 <div style={s.botBubble}>
                   <span style={s.dot}/><span style={{...s.dot,animationDelay:"0.2s"}}/><span style={{...s.dot,animationDelay:"0.4s"}}/>
                 </div>
@@ -688,9 +891,9 @@ export default function KarbalaChatbot() {
           0%,100% { opacity:0.2; transform:scale(1); }
           50% { opacity:0.9; transform:scale(1.5); }
         }
-        @keyframes swingLantern {
-          0%,100% { transform:rotate(-8deg); }
-          50% { transform:rotate(8deg); }
+        @keyframes pennantSway {
+          0%,100% { transform:rotate(-3.5deg); }
+          50% { transform:rotate(3.5deg); }
         }
         @keyframes dotBounce {
           0%,80%,100% { transform:translateY(0); opacity:0.4; }
@@ -704,13 +907,27 @@ export default function KarbalaChatbot() {
           from { opacity:0; transform:translateY(8px); }
           to { opacity:1; transform:translateY(0); }
         }
-        @keyframes speakMouth {
-          0% { ry:2; }
-          100% { ry:5; }
-        }
         @keyframes speakRing {
           0% { transform:scale(1); opacity:0.2; }
           100% { transform:scale(1.15); opacity:0; }
+        }
+        @keyframes blinkLids {
+          0%,93%,100% { transform:scaleY(0); }
+          96% { transform:scaleY(1); }
+        }
+        @keyframes headBob {
+          0%,100% { transform:translateY(0) rotate(0deg); }
+          25% { transform:translateY(-1.5px) rotate(-1deg); }
+          50% { transform:translateY(0.5px) rotate(0.5deg); }
+          75% { transform:translateY(-1px) rotate(1deg); }
+        }
+        @keyframes headTilt {
+          0%,100% { transform:rotate(0deg) translateY(0); }
+          50% { transform:rotate(-2.5deg) translateY(-1px); }
+        }
+        @keyframes spinRing {
+          from { transform:rotate(0deg); }
+          to { transform:rotate(360deg); }
         }
         @keyframes waveAnim {
           0%,100% { transform:scaleY(0.4); }
@@ -723,6 +940,25 @@ export default function KarbalaChatbot() {
         input::placeholder { color: rgba(255,200,150,0.4); }
         input:focus { border-color: rgba(255,150,100,0.8) !important; }
         button:hover { cursor: pointer; }
+
+        /* Mobile: stack the scholar panel above the chat panel instead of
+           squeezing them side by side (which was crushing the chat column
+           down to a sliver a few pixels wide). */
+        @media (max-width: 820px) {
+          .kaz-main-layout {
+            flex-direction: column !important;
+            align-items: center !important;
+            padding: 0 14px !important;
+          }
+          .kaz-scholar-side {
+            width: 100% !important;
+            max-width: 340px !important;
+          }
+          .kaz-chat-side {
+            width: 100% !important;
+            min-height: 420px !important;
+          }
+        }
       `}</style>
     </div>
   );
@@ -800,35 +1036,38 @@ const s = {
     zIndex: 0,
     pointerEvents: "none",
   },
-  lanternBar: {
-    display: "flex",
-    gap: "60px",
-    alignItems: "flex-start",
-    marginBottom: 8,
-    zIndex: 2,
-    paddingTop: 0,
-  },
-  lanternWrap: {
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "center",
-    animation: "swingLantern 4s ease-in-out infinite",
-    transformOrigin: "top center",
-  },
-  lanternString: { width:2, height:40, background:"#666" },
-  lantern: {
-    width:32, height:48,
-    borderRadius: "50% 50% 45% 45%",
+  buntingWrap: {
     position: "relative",
-    boxShadow: "0 0 20px 8px rgba(255,150,50,0.3)",
+    width: "100%",
+    overflow: "hidden",
+    display: "flex",
+    justifyContent: "center",
+    paddingTop: 4,
+    marginBottom: 10,
+    zIndex: 2,
   },
-  lanternCap: {
-    position:"absolute", top:-10, left:"50%", transform:"translateX(-50%)",
-    width:24, height:12, background:"#444", borderRadius:"4px 4px 0 0",
+  // Gold rope the pennants hang from (runs edge to edge).
+  rope: {
+    position: "absolute",
+    top: 9, left: "-2%", width: "104%", height: 4,
+    background: "linear-gradient(180deg,#8a6a34 0%,#e0b64a 45%,#6d4f26 100%)",
+    boxShadow: "0 1px 4px rgba(0,0,0,0.5)",
+    zIndex: 1,
   },
-  lanternFlame: {
-    position:"absolute", inset:6, borderRadius:"50%",
-    background:"rgba(255,220,80,0.65)",
+  pennantRow: {
+    position: "relative",
+    zIndex: 2,
+    display: "flex",
+    justifyContent: "center",
+    alignItems: "flex-start",
+    gap: 5,
+    flexWrap: "nowrap",
+  },
+  pennant: {
+    flex: "0 0 auto",
+    transformOrigin: "top center",
+    animation: "pennantSway 3.6s ease-in-out infinite",
+    filter: "drop-shadow(0 3px 4px rgba(0,0,0,0.5))",
   },
   mainLayout: {
     display: "flex",
@@ -916,12 +1155,11 @@ const s = {
     cursor: "pointer",
   },
   kazLogo: {
-    width: 80, height: 80,
-    borderRadius: "50%",
-    objectFit: "cover",
-    border: "2px solid rgba(255,215,0,0.4)",
-    marginTop: 12,
-    boxShadow: "0 0 16px rgba(255,150,50,0.3)",
+    width: 132,
+    height: 132,
+    objectFit: "contain",
+    marginTop: 14,
+    filter: "drop-shadow(0 0 12px rgba(255,170,70,0.3))",
   },
   kazLogoFallback: {
     width: 80, height: 80,

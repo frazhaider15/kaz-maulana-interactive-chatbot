@@ -1,11 +1,11 @@
-# Ustadh Noor — Interactive Karbala Guide
+# Teacher Noor — Interactive Karbala Guide
 
 An interactive Islamic education chatbot that helps children (ages 6–14) learn
 about Karbala, Imam Hussain (AS), Muharram, and Azadari. Built with React + Vite.
 KAZ School & Welfare.
 
 Students type a question (or tap one of the suggested prompts), it's sent to
-Claude, and Ustadh Noor — an animated scholar avatar — replies in a chat panel.
+Claude, and Teacher Noor — an animated scholar avatar — replies in a chat panel.
 
 ## Prerequisites
 
