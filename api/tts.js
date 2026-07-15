@@ -15,6 +15,23 @@ const ELEVENLABS_DEFAULT_VOICE_ID = "pqHfZKP75CvOlQylNhV4"; // "Bill" — older 
 // 32 languages). Swap to "eleven_turbo_v2_5" for a touch more warmth at slightly
 // higher latency, or back to "eleven_multilingual_v2" for max fidelity (slowest).
 const ELEVENLABS_MODEL_ID = process.env.ELEVENLABS_MODEL_ID || "eleven_flash_v2_5";
+
+// Per-language voice/model overrides. The <audio> element passes ?lang=... (see
+// KarbalaChatbot.jsx). A single ElevenLabs voice can speak many languages via a
+// multilingual model, so these are OPTIONAL — but the default "Bill" voice is an
+// American male, so Hausa reads with an American accent. To improve Hausa, set
+// ELEVENLABS_VOICE_ID_HA to a Hausa/African-native voice from your Voice Library,
+// and (if pronunciation is poor) ELEVENLABS_MODEL_ID_HA to "eleven_v3" — its
+// 70+ languages cover Hausa better than flash/turbo's 32.
+function pickVoiceId(lang) {
+  const base = process.env.ELEVENLABS_VOICE_ID || ELEVENLABS_DEFAULT_VOICE_ID;
+  if (lang === "ha") return process.env.ELEVENLABS_VOICE_ID_HA || base;
+  return base;
+}
+function pickModelId(lang) {
+  if (lang === "ha") return process.env.ELEVENLABS_MODEL_ID_HA || ELEVENLABS_MODEL_ID;
+  return ELEVENLABS_MODEL_ID;
+}
 // Lighter format = smaller payload + faster first audio chunk when streaming.
 // 22050/32kbps is plenty for spoken speech on a projector; bump to mp3_44100_64
 // or mp3_44100_128 via env if you want richer audio.
@@ -46,12 +63,13 @@ export default async function handler(req, res) {
     return;
   }
 
-  const voiceId = process.env.ELEVENLABS_VOICE_ID || ELEVENLABS_DEFAULT_VOICE_ID;
-
   try {
     // Text comes from the query string (GET, native <audio> streaming) or the
-    // JSON body (POST).
+    // JSON body (POST); ?lang picks the voice/model for that language.
     const text = (req.query?.text ?? req.body?.text ?? "").toString();
+    const lang = (req.query?.lang ?? req.body?.lang ?? "en").toString();
+    const voiceId = pickVoiceId(lang);
+    const modelId = pickModelId(lang);
 
     // The /stream endpoint returns audio as it's generated; piping it straight
     // through lets the browser start playing the first words almost immediately.
@@ -66,7 +84,7 @@ export default async function handler(req, res) {
         },
         body: JSON.stringify({
           text,
-          model_id: ELEVENLABS_MODEL_ID,
+          model_id: modelId,
           voice_settings: ELEVENLABS_VOICE_SETTINGS,
         }),
       }

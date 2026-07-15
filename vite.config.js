@@ -118,7 +118,17 @@ function anthropicProxy(apiKey) {
  * streams back the MP3 audio. Using a server voice means every user hears the
  * exact same voice regardless of their device.
  */
-function elevenLabsProxy(apiKey, voiceId, modelId, outputFormat) {
+function elevenLabsProxy(apiKey, env, defaultVoiceId, defaultModelId, outputFormat) {
+  // A single ElevenLabs voice can speak many languages via a multilingual model,
+  // so per-language overrides are OPTIONAL. The default "Bill" voice is an
+  // American male, so Hausa reads with an American accent — set
+  // ELEVENLABS_VOICE_ID_HA to a Hausa/African-native voice (and, if needed,
+  // ELEVENLABS_MODEL_ID_HA to "eleven_v3") to improve it.
+  const pickVoiceId = (lang) =>
+    (lang === "ha" && env.ELEVENLABS_VOICE_ID_HA) || defaultVoiceId;
+  const pickModelId = (lang) =>
+    (lang === "ha" && env.ELEVENLABS_MODEL_ID_HA) || defaultModelId;
+
   const handle = async (req, res, next) => {
     const isTts = req.url.startsWith("/api/tts");
     if (!isTts || (req.method !== "GET" && req.method !== "POST")) {
@@ -141,14 +151,19 @@ function elevenLabsProxy(apiKey, voiceId, modelId, outputFormat) {
 
     try {
       // GET: text in the query string (browser <audio> streams it directly).
-      // POST: text in the JSON body.
-      let text;
+      // POST: text in the JSON body. ?lang picks the voice/model per language.
+      let text, lang;
       if (req.method === "GET") {
-        text = (new URL(req.url, "http://localhost").searchParams.get("text") || "").toString();
+        const params = new URL(req.url, "http://localhost").searchParams;
+        text = (params.get("text") || "").toString();
+        lang = (params.get("lang") || "en").toString();
       } else {
         const body = await readJson(req);
         text = (body.text || "").toString();
+        lang = (body.lang || "en").toString();
       }
+      const voiceId = pickVoiceId(lang);
+      const modelId = pickModelId(lang);
 
       // /stream returns audio as it's generated; piping it through lets the
       // browser begin playback on the first chunk instead of the whole file.
@@ -227,7 +242,7 @@ export default defineConfig(({ mode }) => {
     plugins: [
       react(),
       anthropicProxy(env.ANTHROPIC_API_KEY),
-      elevenLabsProxy(env.ELEVENLABS_API_KEY, voiceId, modelId, outputFormat),
+      elevenLabsProxy(env.ELEVENLABS_API_KEY, env, voiceId, modelId, outputFormat),
     ],
   };
 });

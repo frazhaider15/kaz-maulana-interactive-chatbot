@@ -411,19 +411,6 @@ function HussainBunting() {
   );
 }
 
-const SUGGESTED_QUESTIONS = [
-  "Who was Imam Hussain (AS)?",
-  "What happened in Karbala?",
-  "Why do we remember Muharram?",
-  "Who were the 72 companions?",
-  "What is Ashura?",
-  "Who was Hazrat Abbas (AS)?",
-  "Who was Hur ibn Yazid?",
-  "What is Azadari?",
-  "Why is Muharram important?",
-  "Who was Bibi Zainab (SA)?",
-];
-
 const systemPrompt = `You are "Teacher Noor" — a warm, gentle, and knowledgeable Islamic educator helping children (ages 6–14) learn about the events of Karbala, Imam Hussain (AS), Muharram, and Azadari. You are displayed on a projector in a classroom, speaking to a group of students.
 
 Your answer is read aloud by a text-to-speech voice, so it MUST be plain spoken English:
@@ -444,11 +431,69 @@ Your rules:
 
 You are part of KAZ School & Welfare, an Islamic educational organization based in Australia.`;
 
+// ── Languages ─────────────────────────────────────────────────────────────────
+// Everything that differs per language lives here: the language instruction
+// appended to the (English) system prompt, the opening greeting, the tappable
+// quick questions, and the localized UI strings. Adding another language is just
+// another entry in this object — the dropdown builds itself from the keys.
+//
+// Note on Hausa (ha): "Harshen Hausa" is the main language of northern Nigeria.
+// ElevenLabs speaks it via a multilingual model, but the default "Bill" voice is
+// an American male — set ELEVENLABS_VOICE_ID_HA (and optionally
+// ELEVENLABS_MODEL_ID_HA=eleven_v3) in your env for a natural Hausa voice.
+const LANGUAGES = {
+  en: {
+    label: "English",
+    instruction: "",
+    greeting:
+      "As-salamu alaykum, dear students! 🌹 I am Teacher Noor, your Karbala Guide. Ask me anything about Imam Hussain (AS), the events of Karbala, Muharram, or Azadari. I am here to help you learn! 💫",
+    questions: [
+      "Who was Imam Hussain (AS)?",
+      "What happened in Karbala?",
+      "Why do we remember Muharram?",
+      "Who were the 72 companions?",
+      "What is Ashura?",
+      "Who was Hazrat Abbas (AS)?",
+      "Who was Hur ibn Yazid?",
+      "What is Azadari?",
+      "Why is Muharram important?",
+      "Who was Bibi Zainab (SA)?",
+    ],
+    quickLabel: "✨ Quick Questions — Tap to Ask",
+    placeholder: "Type your question here...",
+    apology: "I'm sorry, I couldn't answer that. Please try again! 🌹",
+    oops: "Oops! Something went wrong. Please try again! 🌹",
+  },
+  ha: {
+    label: "Hausa",
+    instruction:
+      " CRITICAL LANGUAGE RULE: Reply ONLY in Hausa (Harshen Hausa, the language of northern Nigeria). Every single sentence must be in simple, natural Hausa that a child aged 6 to 14 can understand. Keep Islamic names and the honorifics (AS) and (SA) exactly as they are. Do NOT write any sentences in English.",
+    greeting:
+      "Assalamu alaikum, ɗalibai masu daraja! Ni ne Malam Noor, jagoranku na Karbala. Ku tambaye ni kome game da Imam Hussain (AS), abubuwan da suka faru a Karbala, Muharram, ko Azadari. Ina nan don in taimaka muku ku koya!",
+    questions: [
+      "Wane ne Imam Hussain (AS)?",
+      "Me ya faru a Karbala?",
+      "Me ya sa muke tuna Muharram?",
+      "Su wa ne abokan tafiya 72?",
+      "Menene Ashura?",
+      "Wane ne Hazrat Abbas (AS)?",
+      "Wane ne Hurru ɗan Yazid?",
+      "Menene Azadari?",
+      "Me ya sa Muharram yake da muhimmanci?",
+      "Wace ce Bibi Zainab (SA)?",
+    ],
+    quickLabel: "✨ Tambayoyi Masu Sauri — Danna Don Tambaya",
+    placeholder: "Rubuta tambayarka a nan...",
+    apology: "Yi haƙuri, ban iya amsa wannan ba. Da fatan za a sake gwadawa! 🌹",
+    oops: "Kash! Wani abu ya faskara. Da fatan za a sake gwadawa! 🌹",
+  },
+};
+
 // The opening message Teacher Noor shows and speaks aloud on startup.
-const GREETING =
-  "As-salamu alaykum, dear students! 🌹 I am Teacher Noor, your Karbala Guide. Ask me anything about Imam Hussain (AS), the events of Karbala, Muharram, or Azadari. I am here to help you learn! 💫";
+const GREETING = LANGUAGES.en.greeting;
 
 export default function KarbalaChatbot() {
+  const [language, setLanguage] = useState("en");
   const [messages, setMessages] = useState([
     { role: "assistant", content: GREETING },
   ]);
@@ -463,6 +508,9 @@ export default function KarbalaChatbot() {
   // sentence, the next sentence preloads into the other.
   const audioPoolRef = useRef([]);
   const mutedRef = useRef(false);
+  // Current language for the speech pipeline. A ref (not just state) so the
+  // async consumer/ttsUrl always read the latest value without stale closures.
+  const langRef = useRef("en");
   // Mutable state for the in-progress spoken answer (refs, not React state, so
   // producing/consuming sentences doesn't trigger re-renders).
   const speechRef = useRef({
@@ -494,7 +542,22 @@ export default function KarbalaChatbot() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const ttsUrl = (s) => `/api/tts?text=${encodeURIComponent(s)}`;
+  const ttsUrl = (s) =>
+    `/api/tts?text=${encodeURIComponent(s)}&lang=${encodeURIComponent(langRef.current)}`;
+
+  // Switch language: reset the chat to the new greeting, point the speech
+  // pipeline at the new voice, and (if the session is live and unmuted) speak
+  // the fresh greeting aloud.
+  function changeLanguage(next) {
+    if (next === language || !LANGUAGES[next]) return;
+    stopAudio();
+    setLanguage(next);
+    langRef.current = next;
+    const greeting = LANGUAGES[next].greeting;
+    setMessages([{ role: "assistant", content: greeting }]);
+    setInput("");
+    if (started && !mutedRef.current) speak(greeting);
+  }
 
   // Cancel the current spoken answer: invalidate the producer/consumer (bump
   // seq), clear the queue, and stop both pooled elements.
@@ -655,7 +718,7 @@ export default function KarbalaChatbot() {
         if (p?.then) p.then(() => { a.pause(); a.removeAttribute("src"); }).catch(() => {});
       } catch { /* ignore */ }
     });
-    speak(GREETING);
+    speak(LANGUAGES[language].greeting);
   }
 
   function toggleMute() {
@@ -708,13 +771,15 @@ export default function KarbalaChatbot() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          system: systemPrompt,
+          // Append the per-language instruction so Teacher Noor answers in the
+          // language the class has selected.
+          system: systemPrompt + LANGUAGES[language].instruction,
           messages: newMessages.map((m) => ({ role: m.role, content: m.content })),
         }),
       });
 
       if (!response.ok || !response.body) {
-        let msg = "I'm sorry, I couldn't answer that. Please try again! 🌹";
+        let msg = LANGUAGES[language].apology;
         try { const d = await response.json(); msg = d.error?.message || msg; } catch { /* not JSON */ }
         acc = msg;
         setAssistant(acc);
@@ -747,13 +812,13 @@ export default function KarbalaChatbot() {
       }
 
       if (!acc.trim()) {
-        acc = "I'm sorry, I couldn't answer that. Please try again! 🌹";
+        acc = LANGUAGES[language].apology;
         setAssistant(acc);
         if (wantSpeech) feedSpeech(acc, seq);
       }
       if (wantSpeech) endSpeech(seq);
     } catch {
-      const errReply = "Oops! Something went wrong. Please try again! 🌹";
+      const errReply = LANGUAGES[language].oops;
       setAssistant(errReply);
       speak(errReply); // begins a fresh turn (invalidates any partial speech)
     } finally {
@@ -833,8 +898,25 @@ export default function KarbalaChatbot() {
         <div style={s.chatSide} className="kaz-chat-side">
           {/* Header */}
           <div style={s.header}>
-            <div style={s.headerTitle}>🕌 Ask Teacher Noor</div>
-            <div style={s.headerSub}>About Imam Hussain (AS), Karbala & Muharram</div>
+            <div style={s.headerText}>
+              <div style={s.headerTitle}>🕌 Ask Teacher Noor</div>
+              <div style={s.headerSub}>About Imam Hussain (AS), Karbala & Muharram</div>
+            </div>
+            <label style={s.langWrap} title="Choose language">
+              <span style={s.langGlobe}>🌐</span>
+              <select
+                style={s.langSelect}
+                value={language}
+                onChange={(e) => changeLanguage(e.target.value)}
+                aria-label="Choose language"
+              >
+                {Object.entries(LANGUAGES).map(([code, cfg]) => (
+                  <option key={code} value={code} style={{ color: "#1a0000" }}>
+                    {cfg.label}
+                  </option>
+                ))}
+              </select>
+            </label>
           </div>
 
           {/* Messages */}
@@ -860,9 +942,9 @@ export default function KarbalaChatbot() {
 
           {/* Quick Questions */}
           <div style={s.qWrap}>
-            <div style={s.qLabel}>✨ Quick Questions — Tap to Ask</div>
+            <div style={s.qLabel}>{LANGUAGES[language].quickLabel}</div>
             <div style={s.qGrid}>
-              {SUGGESTED_QUESTIONS.map((q, i) => (
+              {LANGUAGES[language].questions.map((q, i) => (
                 <button key={i} style={s.qChip} onClick={() => sendMessage(q)} disabled={loading}
                   onMouseEnter={e=>e.currentTarget.style.background="#b71c1c"}
                   onMouseLeave={e=>e.currentTarget.style.background="#8b0000"}>
@@ -874,7 +956,7 @@ export default function KarbalaChatbot() {
 
           {/* Input */}
           <div style={s.inputRow}>
-            <input style={s.input} value={input} placeholder="Type your question here..."
+            <input style={s.input} value={input} placeholder={LANGUAGES[language].placeholder}
               onChange={e=>setInput(e.target.value)}
               onKeyDown={e=>e.key==="Enter" && sendMessage()}
               disabled={loading}/>
@@ -1194,6 +1276,41 @@ const s = {
     background: "linear-gradient(135deg, #5a0000, #8b0000 60%, #3a0000)",
     padding: "14px 20px",
     borderBottom: "1px solid rgba(255,255,255,0.07)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  headerText: {
+    minWidth: 0,
+  },
+  langWrap: {
+    display: "flex",
+    alignItems: "center",
+    gap: 6,
+    flexShrink: 0,
+    background: "rgba(0,0,0,0.35)",
+    border: "1px solid rgba(255,215,0,0.35)",
+    borderRadius: 20,
+    padding: "5px 10px",
+    cursor: "pointer",
+  },
+  langGlobe: {
+    fontSize: 14,
+    lineHeight: 1,
+  },
+  langSelect: {
+    background: "transparent",
+    color: "#ffd700",
+    border: "none",
+    outline: "none",
+    fontSize: 13,
+    fontWeight: 700,
+    fontFamily: "'Nunito', sans-serif",
+    cursor: "pointer",
+    appearance: "none",
+    WebkitAppearance: "none",
+    paddingRight: 2,
   },
   headerTitle: {
     fontFamily: "'Amiri', serif",
