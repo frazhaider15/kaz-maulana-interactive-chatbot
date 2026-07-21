@@ -119,15 +119,25 @@ function anthropicProxy(apiKey) {
  * exact same voice regardless of their device.
  */
 function elevenLabsProxy(apiKey, env, defaultVoiceId, defaultModelId, outputFormat) {
-  // A single ElevenLabs voice can speak many languages via a multilingual model,
-  // so per-language overrides are OPTIONAL. The default "Bill" voice is an
-  // American male, so Hausa reads with an American accent — set
-  // ELEVENLABS_VOICE_ID_HA to a Hausa/African-native voice (and, if needed,
-  // ELEVENLABS_MODEL_ID_HA to "eleven_v3") to improve it.
-  const pickVoiceId = (lang) =>
-    (lang === "ha" && env.ELEVENLABS_VOICE_ID_HA) || defaultVoiceId;
-  const pickModelId = (lang) =>
-    (lang === "ha" && env.ELEVENLABS_MODEL_ID_HA) || defaultModelId;
+  // Per-language voice/model overrides, keyed by the ?lang= code:
+  // ELEVENLABS_VOICE_ID_<CODE> / ELEVENLABS_MODEL_ID_<CODE> (e.g. ..._HA, ..._UR).
+  // OPTIONAL — one voice speaks many languages via a multilingual model, so
+  // unset codes fall back to the shared default. Worth setting though: the
+  // default "Bill" voice is an American male, so Hausa and Urdu read with an
+  // American accent, and "eleven_v3" covers both languages where flash does not.
+  // The code is sanitised to A–Z so a hostile ?lang= can't probe arbitrary env vars.
+  const langSuffix = (lang) => {
+    const code = String(lang || "").toUpperCase().replace(/[^A-Z]/g, "");
+    return code && code !== "EN" ? code : "";
+  };
+  const pickVoiceId = (lang) => {
+    const suffix = langSuffix(lang);
+    return (suffix && env[`ELEVENLABS_VOICE_ID_${suffix}`]) || defaultVoiceId;
+  };
+  const pickModelId = (lang) => {
+    const suffix = langSuffix(lang);
+    return (suffix && env[`ELEVENLABS_MODEL_ID_${suffix}`]) || defaultModelId;
+  };
 
   const handle = async (req, res, next) => {
     const isTts = req.url.startsWith("/api/tts");

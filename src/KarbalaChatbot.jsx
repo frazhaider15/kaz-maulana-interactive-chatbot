@@ -437,10 +437,14 @@ You are part of KAZ School & Welfare, an Islamic educational organization based 
 // quick questions, and the localized UI strings. Adding another language is just
 // another entry in this object — the dropdown builds itself from the keys.
 //
-// Note on Hausa (ha): "Harshen Hausa" is the main language of northern Nigeria.
-// ElevenLabs speaks it via a multilingual model, but the default "Bill" voice is
-// an American male — set ELEVENLABS_VOICE_ID_HA (and optionally
-// ELEVENLABS_MODEL_ID_HA=eleven_v3) in your env for a natural Hausa voice.
+// `rtl: true` flips the chat to right-to-left and switches to a Nastaliq font
+// (used by Urdu). `label` is shown on the language buttons, so it's written in
+// the language's own script.
+//
+// VOICE: every language plays through the same ElevenLabs voice by default. To
+// give one its own voice or model, set ELEVENLABS_VOICE_ID_<CODE> /
+// ELEVENLABS_MODEL_ID_<CODE> in your env (e.g. ELEVENLABS_VOICE_ID_UR) — the
+// server picks them up automatically, no code change needed.
 const LANGUAGES = {
   en: {
     label: "English",
@@ -486,6 +490,30 @@ const LANGUAGES = {
     placeholder: "Rubuta tambayarka a nan...",
     apology: "Yi haƙuri, ban iya amsa wannan ba. Da fatan za a sake gwadawa! 🌹",
     oops: "Kash! Wani abu ya faskara. Da fatan za a sake gwadawa! 🌹",
+  },
+  ur: {
+    label: "اردو",
+    rtl: true,
+    instruction:
+      " CRITICAL LANGUAGE RULE: Reply ONLY in Urdu (اردو), written in the Urdu/Arabic script — never in Roman Urdu and never in English. Every single sentence must be in simple, natural Urdu that a child aged 6 to 14 can understand. Keep Islamic names and the honorifics (AS) and (SA) exactly as they are.",
+    greeting:
+      "السلام علیکم، پیارے طلبہ! 🌹 میں ٹیچر نور ہوں، آپ کا کربلا گائیڈ۔ مجھ سے امام حسین (AS)، کربلا کے واقعات، محرم، یا عزاداری کے بارے میں کچھ بھی پوچھیں۔ میں یہاں آپ کی مدد کرنے کے لیے موجود ہوں! 💫",
+    questions: [
+      "امام حسین (AS) کون تھے؟",
+      "کربلا میں کیا ہوا؟",
+      "ہم محرم کو کیوں یاد کرتے ہیں؟",
+      "72 ساتھی کون تھے؟",
+      "عاشورا کیا ہے؟",
+      "حضرت عباس (AS) کون تھے؟",
+      "حر بن یزید کون تھے؟",
+      "عزاداری کیا ہے؟",
+      "محرم کیوں اہم ہے؟",
+      "بی بی زینب (SA) کون تھیں؟",
+    ],
+    quickLabel: "✨ فوری سوالات — پوچھنے کے لیے دبائیں",
+    placeholder: "اپنا سوال یہاں لکھیں...",
+    apology: "معذرت، میں اس کا جواب نہیں دے سکا۔ براہ کرم دوبارہ کوشش کریں! 🌹",
+    oops: "افوہ! کچھ غلط ہو گیا۔ براہ کرم دوبارہ کوشش کریں! 🌹",
   },
 };
 
@@ -826,6 +854,20 @@ export default function KarbalaChatbot() {
     }
   }
 
+  // Active language config, plus the text overrides that right-to-left scripts
+  // (Urdu) need: flipped direction and a Nastaliq face, which sits taller than
+  // Latin type and so wants a roomier line height.
+  const L = LANGUAGES[language];
+  const rtlText = L.rtl
+    ? {
+        direction: "rtl",
+        textAlign: "right",
+        fontFamily: "'Noto Nastaliq Urdu', 'Nunito', sans-serif",
+        fontSize: 16,
+        lineHeight: 2.1,
+      }
+    : null;
+
   return (
     <div style={s.wrapper}>
       {/* Start overlay — one tap plays the greeting and unlocks audio. */}
@@ -902,21 +944,32 @@ export default function KarbalaChatbot() {
               <div style={s.headerTitle}>🕌 Ask Teacher Noor</div>
               <div style={s.headerSub}>About Imam Hussain (AS), Karbala & Muharram</div>
             </div>
-            <label style={s.langWrap} title="Choose language">
-              <span style={s.langGlobe}>🌐</span>
-              <select
-                style={s.langSelect}
-                value={language}
-                onChange={(e) => changeLanguage(e.target.value)}
-                aria-label="Choose language"
-              >
-                {Object.entries(LANGUAGES).map(([code, cfg]) => (
-                  <option key={code} value={code} style={{ color: "#1a0000" }}>
+            {/* Segmented language switcher — every option visible at a glance,
+                so kids can see (and tap) their language without opening a menu. */}
+            <div style={s.langBar} role="group" aria-label="Choose language">
+              <span style={s.langGlobe} aria-hidden="true">🌐</span>
+              {Object.entries(LANGUAGES).map(([code, cfg]) => {
+                const active = code === language;
+                return (
+                  <button
+                    key={code}
+                    type="button"
+                    style={{ ...s.langBtn, ...(active ? s.langBtnActive : null) }}
+                    onClick={() => changeLanguage(code)}
+                    aria-pressed={active}
+                    title={`Switch to ${cfg.label}`}
+                    onMouseEnter={(e) => {
+                      if (!active) e.currentTarget.style.background = "rgba(255,215,0,0.14)";
+                    }}
+                    onMouseLeave={(e) => {
+                      if (!active) e.currentTarget.style.background = "transparent";
+                    }}
+                  >
                     {cfg.label}
-                  </option>
-                ))}
-              </select>
-            </label>
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
           {/* Messages */}
@@ -924,7 +977,10 @@ export default function KarbalaChatbot() {
             {messages.map((msg, i) => (
               <div key={i} style={{ ...s.msgRow, justifyContent: msg.role==="user" ? "flex-end" : "flex-start" }}>
                 {msg.role === "assistant" && <Scholar size={40}/>}
-                <div style={msg.role==="user" ? s.userBubble : s.botBubble}>
+                <div
+                  dir={L.rtl ? "rtl" : "ltr"}
+                  style={{ ...(msg.role==="user" ? s.userBubble : s.botBubble), ...rtlText }}
+                >
                   {msg.content}
                 </div>
               </div>
@@ -941,11 +997,15 @@ export default function KarbalaChatbot() {
           </div>
 
           {/* Quick Questions */}
-          <div style={s.qWrap}>
-            <div style={s.qLabel}>{LANGUAGES[language].quickLabel}</div>
+          <div style={s.qWrap} dir={L.rtl ? "rtl" : "ltr"}>
+            <div style={{ ...s.qLabel, ...(L.rtl ? { textAlign: "right" } : null) }}>
+              {L.quickLabel}
+            </div>
             <div style={s.qGrid}>
-              {LANGUAGES[language].questions.map((q, i) => (
-                <button key={i} style={s.qChip} onClick={() => sendMessage(q)} disabled={loading}
+              {L.questions.map((q, i) => (
+                <button key={i}
+                  style={{ ...s.qChip, ...(L.rtl ? s.qChipRtl : null) }}
+                  onClick={() => sendMessage(q)} disabled={loading}
                   onMouseEnter={e=>e.currentTarget.style.background="#b71c1c"}
                   onMouseLeave={e=>e.currentTarget.style.background="#8b0000"}>
                   {q}
@@ -956,7 +1016,10 @@ export default function KarbalaChatbot() {
 
           {/* Input */}
           <div style={s.inputRow}>
-            <input style={s.input} value={input} placeholder={LANGUAGES[language].placeholder}
+            <input
+              style={{ ...s.input, ...(L.rtl ? { direction: "rtl", textAlign: "right" } : null) }}
+              dir={L.rtl ? "rtl" : "ltr"}
+              value={input} placeholder={L.placeholder}
               onChange={e=>setInput(e.target.value)}
               onKeyDown={e=>e.key==="Enter" && sendMessage()}
               disabled={loading}/>
@@ -966,7 +1029,7 @@ export default function KarbalaChatbot() {
       </div>
 
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Amiri:wght@400;700&family=Nunito:wght@400;600;700;800&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Amiri:wght@400;700&family=Nunito:wght@400;600;700;800&family=Noto+Nastaliq+Urdu:wght@400;600&display=swap');
         * { box-sizing: border-box; }
 
         @keyframes twinkle {
@@ -1022,6 +1085,36 @@ export default function KarbalaChatbot() {
         input::placeholder { color: rgba(255,200,150,0.4); }
         input:focus { border-color: rgba(255,150,100,0.8) !important; }
         button:hover { cursor: pointer; }
+
+        /* Scrollbars — the OS default is a bright white/grey bar that cuts
+           straight through the dark crimson panels. Restyle every scrollable
+           region (messages list, quick-question grid, page) to match the theme.
+           Firefox only supports the two scrollbar-* properties; WebKit/Blink
+           (Chrome, Edge, Safari) use the ::-webkit-scrollbar pseudo-elements. */
+        * {
+          scrollbar-width: thin;
+          scrollbar-color: #8b0000 rgba(30,0,0,0.5);
+        }
+        ::-webkit-scrollbar {
+          width: 10px;
+          height: 10px;
+        }
+        ::-webkit-scrollbar-track {
+          background: rgba(30,0,0,0.5);
+          border-radius: 999px;
+        }
+        ::-webkit-scrollbar-thumb {
+          background: linear-gradient(180deg, #a01010, #6a0000);
+          border: 1px solid rgba(255,215,0,0.25);
+          border-radius: 999px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+          background: linear-gradient(180deg, #c0392b, #8b0000);
+          border-color: rgba(255,215,0,0.5);
+        }
+        /* Hide the little stepper arrows Windows draws at each end. */
+        ::-webkit-scrollbar-button { display: none; }
+        ::-webkit-scrollbar-corner { background: transparent; }
 
         /* Mobile: stack the scholar panel above the chat panel instead of
            squeezing them side by side (which was crushing the chat column
@@ -1279,38 +1372,46 @@ const s = {
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
+    flexWrap: "wrap",
     gap: 12,
   },
   headerText: {
     minWidth: 0,
   },
-  langWrap: {
+  langBar: {
     display: "flex",
     alignItems: "center",
-    gap: 6,
+    gap: 3,
     flexShrink: 0,
-    background: "rgba(0,0,0,0.35)",
+    background: "rgba(0,0,0,0.42)",
     border: "1px solid rgba(255,215,0,0.35)",
-    borderRadius: 20,
-    padding: "5px 10px",
-    cursor: "pointer",
+    borderRadius: 999,
+    padding: 4,
+    boxShadow: "inset 0 1px 4px rgba(0,0,0,0.55)",
   },
   langGlobe: {
-    fontSize: 14,
+    fontSize: 15,
     lineHeight: 1,
+    padding: "0 5px 0 7px",
+    filter: "drop-shadow(0 0 6px rgba(255,215,0,0.5))",
   },
-  langSelect: {
+  langBtn: {
     background: "transparent",
-    color: "#ffd700",
+    color: "rgba(255,220,180,0.8)",
     border: "none",
-    outline: "none",
+    borderRadius: 999,
+    padding: "6px 14px",
     fontSize: 13,
     fontWeight: 700,
     fontFamily: "'Nunito', sans-serif",
     cursor: "pointer",
-    appearance: "none",
-    WebkitAppearance: "none",
-    paddingRight: 2,
+    whiteSpace: "nowrap",
+    transition: "background 0.2s, color 0.2s, box-shadow 0.2s",
+  },
+  langBtnActive: {
+    background: "linear-gradient(135deg, #ffd700, #ffb300)",
+    color: "#3a0000",
+    boxShadow: "0 2px 10px rgba(255,183,0,0.45)",
   },
   headerTitle: {
     fontFamily: "'Amiri', serif",
@@ -1401,6 +1502,13 @@ const s = {
     fontWeight: 600,
     transition: "background 0.2s",
     whiteSpace: "nowrap",
+  },
+  // Nastaliq glyphs have long descenders, so Urdu chips need extra vertical room.
+  qChipRtl: {
+    fontFamily: "'Noto Nastaliq Urdu', 'Nunito', sans-serif",
+    fontSize: 14,
+    lineHeight: 1.9,
+    padding: "3px 14px 7px",
   },
   inputRow: {
     display: "flex",

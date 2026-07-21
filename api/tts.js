@@ -17,20 +17,30 @@ const ELEVENLABS_DEFAULT_VOICE_ID = "pqHfZKP75CvOlQylNhV4"; // "Bill" — older 
 const ELEVENLABS_MODEL_ID = process.env.ELEVENLABS_MODEL_ID || "eleven_flash_v2_5";
 
 // Per-language voice/model overrides. The <audio> element passes ?lang=... (see
-// KarbalaChatbot.jsx). A single ElevenLabs voice can speak many languages via a
-// multilingual model, so these are OPTIONAL — but the default "Bill" voice is an
-// American male, so Hausa reads with an American accent. To improve Hausa, set
-// ELEVENLABS_VOICE_ID_HA to a Hausa/African-native voice from your Voice Library,
-// and (if pronunciation is poor) ELEVENLABS_MODEL_ID_HA to "eleven_v3" — its
-// 70+ languages cover Hausa better than flash/turbo's 32.
+// KarbalaChatbot.jsx), and each language may set ELEVENLABS_VOICE_ID_<CODE> /
+// ELEVENLABS_MODEL_ID_<CODE> — e.g. ELEVENLABS_VOICE_ID_HA, ELEVENLABS_MODEL_ID_UR.
+//
+// These are OPTIONAL: one ElevenLabs voice speaks many languages via a
+// multilingual model, so unset codes fall back to the shared default. They're
+// worth setting because the default "Bill" voice is an American male, so Hausa
+// and Urdu read with an American accent. For better pronunciation point the
+// model override at "eleven_v3" — its 70+ languages cover Hausa and Urdu, which
+// flash/turbo's 32 do not.
+//
+// The code is sanitised to A–Z before building the env var name, so a hostile
+// ?lang= value can't be used to probe arbitrary environment variables.
+function langSuffix(lang) {
+  const code = String(lang || "").toUpperCase().replace(/[^A-Z]/g, "");
+  return code && code !== "EN" ? code : "";
+}
 function pickVoiceId(lang) {
   const base = process.env.ELEVENLABS_VOICE_ID || ELEVENLABS_DEFAULT_VOICE_ID;
-  if (lang === "ha") return process.env.ELEVENLABS_VOICE_ID_HA || base;
-  return base;
+  const suffix = langSuffix(lang);
+  return (suffix && process.env[`ELEVENLABS_VOICE_ID_${suffix}`]) || base;
 }
 function pickModelId(lang) {
-  if (lang === "ha") return process.env.ELEVENLABS_MODEL_ID_HA || ELEVENLABS_MODEL_ID;
-  return ELEVENLABS_MODEL_ID;
+  const suffix = langSuffix(lang);
+  return (suffix && process.env[`ELEVENLABS_MODEL_ID_${suffix}`]) || ELEVENLABS_MODEL_ID;
 }
 // Lighter format = smaller payload + faster first audio chunk when streaming.
 // 22050/32kbps is plenty for spoken speech on a projector; bump to mp3_44100_64
